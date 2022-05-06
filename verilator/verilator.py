@@ -25,8 +25,6 @@ import re
 import subprocess
 import threading
 
-from sympy import Mod
-
 
 class Module:
     """
@@ -112,7 +110,7 @@ class Module:
             'verilator',
             '-cc',
             '--exe',
-            '--threads', '1',
+            # '--threads', '1',
             '-CFLAGS', '-fPIC',
             '-LDFLAGS', '-shared',
             '--prefix', self.component,
@@ -236,8 +234,8 @@ class Module:
 
     _WRAPPER = """// Generated, do not modify!
 
-# include <iostream>
-# include "{component}.h"
+#include <iostream>
+#include "{component}.h"
 
 const wchar_t *CONFIG = L"{config}";
 
@@ -261,8 +259,8 @@ extern "C" Block *create_block()
 extern "C" void destroy_block(Block *block)
 {{
     std::cout << "destroy_block: {component}\\n";
-    assert(block != nullptr && std::wcscmp(block->config, CONFIG) == 0);
-    block->config = L"";
+    assert(block != nullptr && block->config == CONFIG);
+    block->config = nullptr;
     delete block;
 }}
 
@@ -276,7 +274,8 @@ void set_resets(Block *block, int value)
 
 extern "C" void reset_block(Block *block)
 {{
-    assert(block != nullptr);
+    assert(block != nullptr && block->config == CONFIG);
+
     set_resets(block, 1);
 {inhibits}
     for (int i = 1; i <= 4; i++)
@@ -289,9 +288,11 @@ extern "C" void reset_block(Block *block)
 }}
 
 extern "C" void work_block(Block *block,
-                           int64_t *input_sizes, 
+                           int64_t *input_sizes,
                            int64_t *output_sizes)
 {{
+    assert(block != nullptr && block->config == CONFIG);
+
     std::cout << "wrapper: " << input_sizes[0] << " " << output_sizes[0] << std::endl;
 }}
 """
@@ -395,15 +396,16 @@ class Instance:
     """
 
     def __init__(self, module: Module, params: Dict[str, Any]):
+        self.block = None  # for clean __del__
+
         self.lib = module.get_library(params)
-        if False:
-            self.config = json.loads(self.lib.config())
-            self.input_vlens = self.config['input_vlens']
-            self.output_vlens = self.config['output_vlens']
-            self.input_sizes = numpy.empty(
-                len(self.input_vlens), dtype=numpy.int64)
-            self.output_sizes = numpy.empty(
-                len(self.output_vlens), dtype=numpy.int64)
+        self.config = json.loads(self.lib.config())
+        self.input_vlens = self.config['input_vlens']
+        self.output_vlens = self.config['output_vlens']
+        self.input_sizes = numpy.empty(
+            len(self.input_vlens), dtype=numpy.int64)
+        self.output_sizes = numpy.empty(
+            len(self.output_vlens), dtype=numpy.int64)
         self.block = self.lib.create_block()
         self.reset()
 
@@ -460,9 +462,9 @@ def test():
 
     ins = Instance(mod, {'DATA_WIDTH': 32})
 
-    # input_item0 = numpy.array([[1], [2], [3]], dtype=numpy.int32)
-    # output_item0 = numpy.empty((5, 1), dtype=numpy.int32)
-    # ins.work([input_item0], [output_item0])
+    input_item0 = numpy.array([[1], [2], [3]], dtype=numpy.int32)
+    output_item0 = numpy.empty((5, 1), dtype=numpy.int32)
+    ins.work([input_item0], [output_item0])
 
 
 if __name__ == '__main__':
