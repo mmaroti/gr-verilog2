@@ -25,6 +25,8 @@ import re
 import subprocess
 import threading
 
+from sympy import Mod
+
 
 class Module:
     """
@@ -221,16 +223,16 @@ class Module:
         return Module._build_job(obj_dir, job)
 
     @staticmethod
-    def _get_bus_vlen(bus: Dict[str, int]) -> int:
+    def _get_vlen(bus: Dict[str, int]) -> int:
         return (bus['tdata'] + 31) // 32 \
             + (bus['tuser'] + 31) // 32 \
             + (bus['tlast'] + 31) // 32
 
     def get_input_vlen(self, params: Dict[str, Any], bus: int) -> int:
-        return Module._get_bus_vlen(self.get_ports(params)['inputs'][bus])
+        return Module._get_vlen(self.get_ports(params)['inputs'][bus])
 
     def get_output_vlen(self, params: Dict[str, Any], bus: int) -> int:
-        return Module._get_bus_vlen(self.get_ports(params)['outputs'][bus])
+        return Module._get_vlen(self.get_ports(params)['outputs'][bus])
 
     _WRAPPER = """// Generated, do not modify!
 
@@ -285,6 +287,13 @@ extern "C" void reset_block(Block *block)
 
     set_resets(block, 0);
 }}
+
+extern "C" void work_block(Block *block,
+                           int64_t *input_sizes, 
+                           int64_t *output_sizes)
+{{
+    std::cout << "wrapper: " << input_sizes[0] << " " << output_sizes[0] << std::endl;
+}}
 """
 
     def _compile_job(self, params: Dict[str, Any]):
@@ -315,6 +324,8 @@ extern "C" void reset_block(Block *block)
         config = {
             'component': self.component,
             'params': params,
+            'input_vlens': [Module._get_vlen(bus) for bus in ports['inputs']],
+            'output_vlens': [Module._get_vlen(bus) for bus in ports['outputs']],
         }
         config.update(ports)
         config = json.dumps(config, ensure_ascii=True)
@@ -358,6 +369,12 @@ extern "C" void reset_block(Block *block)
         lib.create_block.restype = ctypes.c_void_p
         lib.destroy_block.argtypes = [ctypes.c_void_p]
         lib.reset_block.argtypes = [ctypes.c_void_p]
+        lib.work_block.argtypes = [
+            ctypes.c_void_p,
+            numpy.ctypeslib.ndpointer(ctypes.c_int64, flags="C_CONTIGUOUS"),
+            numpy.ctypeslib.ndpointer(ctypes.c_int64, flags="C_CONTIGUOUS"),
+        ]
+
         self.lib_cache[lib_path] = (lib, mtime)
         return lib
 
@@ -379,7 +396,14 @@ class Instance:
 
     def __init__(self, module: Module, params: Dict[str, Any]):
         self.lib = module.get_library(params)
-        self.config = json.loads(self.lib.config())
+        if False:
+            self.config = json.loads(self.lib.config())
+            self.input_vlens = self.config['input_vlens']
+            self.output_vlens = self.config['output_vlens']
+            self.input_sizes = numpy.empty(
+                len(self.input_vlens), dtype=numpy.int64)
+            self.output_sizes = numpy.empty(
+                len(self.output_vlens), dtype=numpy.int64)
         self.block = self.lib.create_block()
         self.reset()
 
@@ -399,20 +423,6 @@ class Instance:
     def output_buses(self) -> List[str]:
         return [b['name'] for b in self.config['outputs']]
 
-    def input_vlen(self, bus: int) -> int:
-        return Module._get_bus_vlen(self.config['inputs'][bus])
-
-    def output_vlen(self, bus: int) -> int:
-        return Module._get_bus_vlen(self.config['outputs'][bus])
-
-    @property
-    def input_vlens(self) -> int:
-        return [Module._get_bus_vlen(b) for b in self.config['inputs']]
-
-    @property
-    def output_vlens(self) -> int:
-        return [Module._get_bus_vlen(b) for b in self.config['outputs']]
-
     def reset(self):
         self.lib.reset_block(self.block)
 
@@ -424,15 +434,19 @@ class Instance:
         buffers and returns the number of consumed and produced items.
         """
 
-        input_vlens = self.input_vlens
-        assert len(input_items) == len(input_vlens)
-        for a, b in zip(input_items, input_vlens):
-            assert a.ndims == 2 and a.shape[1] == b
+        assert len(input_items) == len(self.input_vlens)
+        for i, a in enumerate(input_items):
+            assert a.ndim == 2 and a.shape[1] == self.input_vlens[i]
+            self.input_sizes[i] = a.shape[0]
 
-        output_vlens = self.output_vlens
-        assert len(output_items) == len(output_vlens)
-        for a, b in zip(output_items, output_vlens):
-            assert a.ndims == 2 and a.shape[1] == b
+        assert len(output_items) == len(self.output_vlens)
+        for i, a in enumerate(output_items):
+            assert a.ndim == 2 and a.shape[1] == self.output_vlens[i]
+            self.output_sizes[i] = a.shape[0]
+
+        print(self.input_sizes, self.output_sizes)
+
+        self.lib.work_block(self.block, self.input_sizes, self.output_sizes)
 
 
 LIBRARY = os.path.abspath(os.path.join(
@@ -445,7 +459,10 @@ def test():
     ])
 
     ins = Instance(mod, {'DATA_WIDTH': 32})
-    print(ins.input_vlens, ins.input_buses)
+
+    # input_item0 = numpy.array([[1], [2], [3]], dtype=numpy.int32)
+    # output_item0 = numpy.empty((5, 1), dtype=numpy.int32)
+    # ins.work([input_item0], [output_item0])
 
 
 if __name__ == '__main__':
