@@ -14,11 +14,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import ctypes
 import hashlib
 import json
+import numpy
 import os
 import re
 import subprocess
@@ -26,6 +27,10 @@ import threading
 
 
 class Module:
+    """
+    A class that manages the parsing and compilation of a verilog module.
+    """
+
     def __init__(self, sources: List[str],
                  component: Optional[str] = None,
                  build_dir: Optional[str] = None):
@@ -215,6 +220,18 @@ class Module:
 
         return Module._build_job(obj_dir, job)
 
+    @staticmethod
+    def _get_bus_vlen(bus: Dict[str, int]) -> int:
+        return (bus['tdata'] + 31) // 32 \
+            + (bus['tuser'] + 31) // 32 \
+            + (bus['tlast'] + 31) // 32
+
+    def get_input_vlen(self, params: Dict[str, Any], bus: int) -> int:
+        return Module._get_bus_vlen(self.get_ports(params)['inputs'][bus])
+
+    def get_output_vlen(self, params: Dict[str, Any], bus: int) -> int:
+        return Module._get_bus_vlen(self.get_ports(params)['outputs'][bus])
+
     _WRAPPER = """// Generated, do not modify!
 
 # include <iostream>
@@ -356,9 +373,15 @@ extern "C" void reset_block(Block *block)
 
 
 class Instance:
+    """
+    A class that manages the creation and execution of a verilog instance.
+    """
+
     def __init__(self, module: Module, params: Dict[str, Any]):
         self.lib = module.get_library(params)
+        self.config = json.loads(self.lib.config())
         self.block = self.lib.create_block()
+        self.reset()
 
     def close(self):
         if self.block is not None:
@@ -368,11 +391,48 @@ class Instance:
     def __del__(self):
         self.close()
 
-    def get_config(self) -> Dict[str, Any]:
-        return json.loads(self.lib.config())
+    @property
+    def input_buses(self) -> List[str]:
+        return [b['name'] for b in self.config['inputs']]
+
+    @property
+    def output_buses(self) -> List[str]:
+        return [b['name'] for b in self.config['outputs']]
+
+    def input_vlen(self, bus: int) -> int:
+        return Module._get_bus_vlen(self.config['inputs'][bus])
+
+    def output_vlen(self, bus: int) -> int:
+        return Module._get_bus_vlen(self.config['outputs'][bus])
+
+    @property
+    def input_vlens(self) -> int:
+        return [Module._get_bus_vlen(b) for b in self.config['inputs']]
+
+    @property
+    def output_vlens(self) -> int:
+        return [Module._get_bus_vlen(b) for b in self.config['outputs']]
 
     def reset(self):
         self.lib.reset_block(self.block)
+
+    def work(self,
+             input_items: List[numpy.ndarray],
+             output_items: List[numpy.ndarray]) -> Tuple[List[int], List[int]]:
+        """
+        Calls the underlying verilog block with the given input and output
+        buffers and returns the number of consumed and produced items.
+        """
+
+        input_vlens = self.input_vlens
+        assert len(input_items) == len(input_vlens)
+        for a, b in zip(input_items, input_vlens):
+            assert a.ndims == 2 and a.shape[1] == b
+
+        output_vlens = self.output_vlens
+        assert len(output_items) == len(output_vlens)
+        for a, b in zip(output_items, output_vlens):
+            assert a.ndims == 2 and a.shape[1] == b
 
 
 LIBRARY = os.path.abspath(os.path.join(
@@ -384,11 +444,8 @@ def test():
         os.path.join(LIBRARY, 'axis_copy_cdc', 'axis_copy_cdc.v'),
     ])
 
-    ins1 = Instance(mod, {})
-    ins2 = Instance(mod, {'DATA_WIDTH': 32})
-
-    print(ins1.get_config())
-    print(ins2.get_config())
+    ins = Instance(mod, {'DATA_WIDTH': 32})
+    print(ins.input_vlens, ins.input_buses)
 
 
 if __name__ == '__main__':

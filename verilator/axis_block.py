@@ -48,7 +48,8 @@ class AxisBlock(gr.basic_block):
         )
 
     def general_work(self, input_items, output_items):
-        print(input_items, output_items)
+        print([a.shape for a in input_items])
+        print([a.shape for a in output_items])
 
         output_items[0][0, :] = [4, 5, 6]
 
