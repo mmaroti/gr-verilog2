@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from asyncore import write
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import ctypes
@@ -113,6 +114,7 @@ class Module:
             # '--threads', '1',
             '-CFLAGS', '-fPIC',
             '-LDFLAGS', '-shared',
+            '-Wno-lint',
             '--prefix', self.component,
             '--Mdir', obj_dir,
             '-o', 'lib{}.so'.format(self.component),
@@ -232,7 +234,7 @@ class Module:
     def get_output_vlen(self, params: Dict[str, Any], bus: int) -> int:
         return Module._get_vlen(self.get_ports(params)['outputs'][bus])
 
-    _WRAPPER = """// Generated, do not modify!
+    _WRAPPER_TEMPLATE = """// Generated, do not modify!
 
 #include <iostream>
 #include "{component}.h"
@@ -277,24 +279,99 @@ extern "C" void reset_block(Block *block)
     assert(block != nullptr && block->config == CONFIG);
 
     set_resets(block, 1);
-{inhibits}
-    for (int i = 1; i <= 4; i++)
+{bus_disable}
+    for (int i = 0; i < 4; i++)
     {{
-        set_clocks(block, i & 1);
+        set_clocks(block, (i + 1) & 1);
         block->impl.eval();
     }}
 
     set_resets(block, 0);
 }}
 
-extern "C" void work_block(Block *block,
-                           int64_t *input_sizes,
-                           int64_t *output_sizes)
+struct stream_t
+{{
+    int64_t len;
+    int32_t *data;
+    int64_t pos;
+}};
+
+extern "C" void work2_block(Block *block,
+                           stream_t *input_streams,
+                           stream_t *output_streams)
 {{
     assert(block != nullptr && block->config == CONFIG);
 
-    std::cout << "wrapper: " << input_sizes[0] << " " << output_sizes[0] << std::endl;
+    int idle = 0;
+    while (idle < 10)
+    {{
+        idle += 1;
+
+        block->impl.eval();
+    }}
 }}
+
+void write_port(CData &port, const int32_t *&input)
+{{
+    port = *(input++);
+}}
+
+void write_port(SData &port, const int32_t *&input)
+{{
+    port = *(input++);
+}}
+
+void write_port(IData &port, const int32_t *&input)
+{{
+    port = *(input++);
+}}
+
+void write_port(QData &port, const int32_t *&input)
+{{
+    uint32_t data0 = *(input++);
+    uint32_t data1 = *(input++);
+    port = ((uint64_t)data0 << 32) | data1;
+}}
+
+template <int N>
+void write_port(WData (&port)[N], const int32_t *&input)
+{{
+    for (int i = 0; i < N; i++)
+        port[i] = *(input++);
+}}
+
+extern "C" void work_block(Block *block,
+                           int64_t *input_sizes,
+                           int64_t *output_sizes,
+                           int32_t **input_items,
+                           int32_t **output_items)
+{{
+    assert(block != nullptr && block->config == CONFIG);
+
+{local_vars}
+    std::cout << "wrapper: " << input_sizes[0] << " " << output_sizes[0] << std::endl;
+    std::cout << "input: " << input_items[0][0] << " " << input_items[0][1] << std::endl;
+    std::cout << "output: " << output_items[0][0] << " " << output_items[0][1] << std::endl;
+
+    int idle = 0;
+    while(idle < 10)
+    {{
+        idle += 1;
+
+{bus_prepare}
+        set_clocks(block, 0);
+        block->impl.eval();
+{bus_transfer}
+
+        set_clocks(block, 1);
+        block->impl.eval();
+    }}
+}}
+"""
+
+    _INPUT_TRANSFER_TERMPLATE = """
+        if (block->impl.{bus}_tready && block->impl.{bus}_tvalid)
+            input_sizes[{idx}] += 1;
 """
 
     def _compile_job(self, params: Dict[str, Any]):
@@ -316,11 +393,50 @@ extern "C" void work_block(Block *block,
         for name in ports['resets']:
             set_resets += "    block->impl.{} = value;\n".format(name)
 
-        inhibits = ""
+        bus_disable = ""
         for axis in ports['inputs']:
-            inhibits += "    block->impl.{}_tvalid = 0;\n".format(axis['name'])
+            bus_disable += "    block->impl.{}_tvalid = 0;\n".format(
+                axis['name'])
         for axis in ports['outputs']:
-            inhibits += "    block->impl.{}_tready = 0;\n".format(axis['name'])
+            bus_disable += "    block->impl.{}_tready = 0;\n".format(
+                axis['name'])
+
+        local_vars = ""
+        for idx, axis in enumerate(ports['inputs']):
+            local_vars += "    int64_t {name}_size = input_sizes[{idx}];\n".format(
+                name=axis['name'], idx=idx)
+            local_vars += "    const int32_t *{name}_data = input_items[{idx}];\n".format(
+                name=axis['name'], idx=idx)
+        for idx, axis in enumerate(ports['outputs']):
+            local_vars += "    int64_t {name}_size = output_sizes[{idx}];\n".format(
+                name=axis['name'], idx=idx)
+            local_vars += "    int32_t *{name}_data = output_items[{idx}];\n".format(
+                name=axis['name'], idx=idx)
+
+        bus_prepare = ""
+        for axis in ports['inputs']:
+            name = axis['name']
+            write_ports = ""
+            for port in ['tdata', 'tuser', 'tlast']:
+                if axis[port] > 0:
+                    write_ports += (
+                        "            write_port(block->impl.{name}_{port}, {name}_data);\n"
+                    ).format(name=name, port=port)
+            bus_prepare += (
+                "        if (block->impl.{name}_tvalid == 0 && {name}_size > 0)\n"
+                "        {{\n"
+                "{write_ports}            block->impl.{name}_tvalid = 1;\n"
+                "        }}\n"
+            ).format(name=name, write_ports=write_ports)
+        for axis in ports['outputs']:
+            bus_prepare += "        block->impl.{name}_tready = ({name}_size > 0);\n".format(
+                name=axis['name'])
+
+        bus_transfer = ""
+        for idx, axis in enumerate(ports['inputs']):
+            bus_transfer += Module._INPUT_TRANSFER_TERMPLATE.format(
+                bus=axis['name'],
+                idx=idx)
 
         config = {
             'component': self.component,
@@ -332,12 +448,15 @@ extern "C" void work_block(Block *block,
         config = json.dumps(config, ensure_ascii=True)
         config = config.replace('"', '\\"')
 
-        content = Module._WRAPPER.format(
+        content = Module._WRAPPER_TEMPLATE.format(
             component=self.component,
             config=config,
             set_clocks=set_clocks,
             set_resets=set_resets,
-            inhibits=inhibits,
+            bus_disable=bus_disable,
+            bus_prepare=bus_prepare,
+            bus_transfer=bus_transfer,
+            local_vars=local_vars,
         )
 
         filename = os.path.join(obj_dir, 'wrapper.cpp')
@@ -356,6 +475,9 @@ extern "C" void work_block(Block *block,
         result.check_returncode()
         assert(os.path.exists(lib_path))
 
+    CTYPES_ITEMS = numpy.ctypeslib.ndpointer(
+        ctypes.c_int32, flags="C_CONTIGUOUS")
+
     def _load_library_job(self, obj_dir: str) -> ctypes.CDLL:
         lib_path = os.path.join(obj_dir, 'lib{}.so'.format(self.component))
 
@@ -367,13 +489,19 @@ extern "C" void work_block(Block *block,
 
         lib = ctypes.cdll.LoadLibrary(lib_path)
         lib.config.restype = ctypes.c_wchar_p
+        config = json.loads(lib.config())
+        num_inputs = len(config['input_vlens'])
+        num_outputs = len(config['output_vlens'])
+
         lib.create_block.restype = ctypes.c_void_p
         lib.destroy_block.argtypes = [ctypes.c_void_p]
         lib.reset_block.argtypes = [ctypes.c_void_p]
         lib.work_block.argtypes = [
             ctypes.c_void_p,
-            numpy.ctypeslib.ndpointer(ctypes.c_int64, flags="C_CONTIGUOUS"),
-            numpy.ctypeslib.ndpointer(ctypes.c_int64, flags="C_CONTIGUOUS"),
+            ctypes.c_int64 * num_inputs,
+            ctypes.c_int64 * num_outputs,
+            Module.CTYPES_ITEMS * num_inputs,
+            Module.CTYPES_ITEMS * num_outputs,
         ]
 
         self.lib_cache[lib_path] = (lib, mtime)
@@ -402,10 +530,10 @@ class Instance:
         self.config = json.loads(self.lib.config())
         self.input_vlens = self.config['input_vlens']
         self.output_vlens = self.config['output_vlens']
-        self.input_sizes = numpy.empty(
-            len(self.input_vlens), dtype=numpy.int64)
-        self.output_sizes = numpy.empty(
-            len(self.output_vlens), dtype=numpy.int64)
+        self._input_sizes = (ctypes.c_int64 * len(self.input_vlens))()
+        self._output_sizes = (ctypes.c_int64 * len(self.output_vlens))()
+        self._input_items = (Module.CTYPES_ITEMS * len(self.input_vlens))()
+        self._output_items = (Module.CTYPES_ITEMS * len(self.input_vlens))()
         self.block = self.lib.create_block()
         self.reset()
 
@@ -436,19 +564,34 @@ class Instance:
         buffers and returns the number of consumed and produced items.
         """
 
+        output_items[0][0] = 10
+        output_items[0][1] = 11
+
         assert len(input_items) == len(self.input_vlens)
         for i, a in enumerate(input_items):
             assert a.ndim == 2 and a.shape[1] == self.input_vlens[i]
-            self.input_sizes[i] = a.shape[0]
+            self._input_sizes[i] = a.shape[0]
+            self._input_items[i] = a.ctypes.data
 
         assert len(output_items) == len(self.output_vlens)
         for i, a in enumerate(output_items):
             assert a.ndim == 2 and a.shape[1] == self.output_vlens[i]
-            self.output_sizes[i] = a.shape[0]
+            self._output_sizes[i] = a.shape[0]
+            self._output_items[i] = a.ctypes.data
 
-        print(self.input_sizes, self.output_sizes)
+        self.lib.work_block(self.block,
+                            self._input_sizes,
+                            self._output_sizes,
+                            self._input_items,
+                            self._output_items)
 
-        self.lib.work_block(self.block, self.input_sizes, self.output_sizes)
+        for i in range(len(self._input_items)):
+            self._input_items[i] = None
+
+        for i in range(len(self._output_items)):
+            self._output_items[i] = None
+
+        print(output_items)
 
 
 LIBRARY = os.path.abspath(os.path.join(
@@ -457,13 +600,15 @@ LIBRARY = os.path.abspath(os.path.join(
 
 def test():
     mod = Module([
-        os.path.join(LIBRARY, 'axis_copy_cdc', 'axis_copy_cdc.v'),
+        # os.path.join(LIBRARY, 'axis_copy_cdc', 'axis_copy_cdc.v'),
+        os.path.join(LIBRARY, 'axis_vector_sum', 'axis_vector_sum.v'),
     ])
 
-    ins = Instance(mod, {'DATA_WIDTH': 32})
+    ins = Instance(mod, {'NUM_VECTORS': 32})
+    print(ins.config)
 
     input_item0 = numpy.array([[1], [2], [3]], dtype=numpy.int32)
-    output_item0 = numpy.empty((5, 1), dtype=numpy.int32)
+    output_item0 = numpy.empty((5, 3), dtype=numpy.int32)
     ins.work([input_item0], [output_item0])
 
 
