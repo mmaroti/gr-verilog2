@@ -14,7 +14,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from asyncore import write
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import ctypes
@@ -186,6 +185,9 @@ class Module:
                 else:
                     raise ValueError('invalid signal: ' + name)
 
+        clocks = sorted(clocks)
+        resets = sorted(resets)
+
         for bus in buses.values():
             assert 'tvalid' in bus and 'tready' in bus
 
@@ -195,6 +197,7 @@ class Module:
             'tuser': val.get('tuser', 0),
             'tlast': val.get('tlast', 0),
         } for key, val in buses.items() if val['dir'] == 'IN']
+        inputs = sorted(inputs, key=lambda d: d['name'])
 
         outputs = [{
             'name': key,
@@ -202,12 +205,18 @@ class Module:
             'tuser': val.get('tuser', 0),
             'tlast': val.get('tlast', 0),
         } for key, val in buses.items() if val['dir'] != 'IN']
+        sorted(outputs, key=lambda d: d['name'])
+
+        input_vlens = [Module._get_vlen(a) for a in inputs]
+        output_vlens = [Module._get_vlen(a) for a in outputs]
 
         ports = {
-            'clocks': sorted(clocks),
-            'resets': sorted(resets),
-            'inputs': sorted(inputs, key=lambda d: d['name']),
-            'outputs': sorted(outputs, key=lambda d: d['name']),
+            'clocks': clocks,
+            'resets': resets,
+            'inputs': inputs,
+            'outputs': outputs,
+            'input_vlens': input_vlens,
+            'output_vlens': output_vlens,
         }
         self.ports_cache[header_path] = (ports, mtime)
 
@@ -279,65 +288,27 @@ extern "C" void reset_block(Block *block)
     assert(block != nullptr && block->config == CONFIG);
 
     set_resets(block, 1);
-{bus_disable}
+{axis_disable}
     for (int i = 0; i < 4; i++)
     {{
-        set_clocks(block, (i + 1) & 1);
+        set_clocks(block, i & 1);
         block->impl.eval();
     }}
 
     set_resets(block, 0);
 }}
 
-struct stream_t
+QData get_qdata(const int32_t *input)
 {{
-    int64_t len;
-    int32_t *data;
-    int64_t pos;
-}};
-
-extern "C" void work2_block(Block *block,
-                           stream_t *input_streams,
-                           stream_t *output_streams)
-{{
-    assert(block != nullptr && block->config == CONFIG);
-
-    int idle = 0;
-    while (idle < 10)
-    {{
-        idle += 1;
-
-        block->impl.eval();
-    }}
+    uint32_t data0 = input[0];
+    uint32_t data1 = input[1];
+    return ((uint64_t)data1 << 32) | data0;
 }}
 
-void write_port(CData &port, const int32_t *&input)
+void set_qdata(int32_t *output, QData data)
 {{
-    port = *(input++);
-}}
-
-void write_port(SData &port, const int32_t *&input)
-{{
-    port = *(input++);
-}}
-
-void write_port(IData &port, const int32_t *&input)
-{{
-    port = *(input++);
-}}
-
-void write_port(QData &port, const int32_t *&input)
-{{
-    uint32_t data0 = *(input++);
-    uint32_t data1 = *(input++);
-    port = ((uint64_t)data0 << 32) | data1;
-}}
-
-template <int N>
-void write_port(WData (&port)[N], const int32_t *&input)
-{{
-    for (int i = 0; i < N; i++)
-        port[i] = *(input++);
+    output[0] = (uint64_t)data;
+    output[1] = (uint64_t)data >> 32;
 }}
 
 extern "C" void work_block(Block *block,
@@ -348,33 +319,32 @@ extern "C" void work_block(Block *block,
 {{
     assert(block != nullptr && block->config == CONFIG);
 
-{local_vars}
-    std::cout << "wrapper: " << input_sizes[0] << " " << output_sizes[0] << std::endl;
-    std::cout << "input: " << input_items[0][0] << " " << input_items[0][1] << std::endl;
-    std::cout << "output: " << output_items[0][0] << " " << output_items[0][1] << std::endl;
-
+{read_sizes}
     int idle = 0;
-    while(idle < 10)
+    while (idle < 10)
     {{
         idle += 1;
 
-{bus_prepare}
+{axis_stage1}
+
         set_clocks(block, 0);
         block->impl.eval();
-{bus_transfer}
 
+{axis_stage2}
         set_clocks(block, 1);
         block->impl.eval();
-    }}
-}}
-"""
 
-    _INPUT_TRANSFER_TERMPLATE = """
-        if (block->impl.{bus}_tready && block->impl.{bus}_tvalid)
-            input_sizes[{idx}] += 1;
+{axis_stage3}    }}
+
+{write_sizes}}}
 """
 
     def _compile_job(self, params: Dict[str, Any]):
+        """
+        This method generates the wrapper.cpp file and compiles the verilated
+        sources into a dynamically linked library.
+        """
+
         obj_dir = self._get_obj_dir(params)
 
         lib_path = os.path.join(obj_dir, 'lib{}.so'.format(self.component))
@@ -393,56 +363,138 @@ extern "C" void work_block(Block *block,
         for name in ports['resets']:
             set_resets += "    block->impl.{} = value;\n".format(name)
 
-        bus_disable = ""
+        axis_disable = ""
         for axis in ports['inputs']:
-            bus_disable += "    block->impl.{}_tvalid = 0;\n".format(
+            axis_disable += "    block->impl.{}_tvalid = 0;\n".format(
                 axis['name'])
         for axis in ports['outputs']:
-            bus_disable += "    block->impl.{}_tready = 0;\n".format(
+            axis_disable += "    block->impl.{}_tready = 0;\n".format(
                 axis['name'])
 
-        local_vars = ""
+        read_sizes = ""
         for idx, axis in enumerate(ports['inputs']):
-            local_vars += "    int64_t {name}_size = input_sizes[{idx}];\n".format(
-                name=axis['name'], idx=idx)
-            local_vars += "    const int32_t *{name}_data = input_items[{idx}];\n".format(
-                name=axis['name'], idx=idx)
+            read_sizes += (
+                "    int64_t {name}_size = input_sizes[{idx}];\n"
+                "    const int32_t *{name}_data = input_items[{idx}];\n"
+                "    bool {name}_step;\n"
+            ).format(name=axis['name'], idx=idx)
         for idx, axis in enumerate(ports['outputs']):
-            local_vars += "    int64_t {name}_size = output_sizes[{idx}];\n".format(
-                name=axis['name'], idx=idx)
-            local_vars += "    int32_t *{name}_data = output_items[{idx}];\n".format(
-                name=axis['name'], idx=idx)
+            read_sizes += (
+                "    int64_t {name}_size = output_sizes[{idx}];\n"
+                "    int32_t *{name}_data = output_items[{idx}];\n"
+            ).format(name=axis['name'], idx=idx)
 
-        bus_prepare = ""
-        for axis in ports['inputs']:
+        axis_stage1 = ""
+
+        for idx, axis in enumerate(ports['inputs']):
             name = axis['name']
-            write_ports = ""
-            for port in ['tdata', 'tuser', 'tlast']:
-                if axis[port] > 0:
-                    write_ports += (
-                        "            write_port(block->impl.{name}_{port}, {name}_data);\n"
-                    ).format(name=name, port=port)
-            bus_prepare += (
+            axis_stage1 += (
                 "        if (block->impl.{name}_tvalid == 0 && {name}_size > 0)\n"
                 "        {{\n"
-                "{write_ports}            block->impl.{name}_tvalid = 1;\n"
-                "        }}\n"
-            ).format(name=name, write_ports=write_ports)
-        for axis in ports['outputs']:
-            bus_prepare += "        block->impl.{name}_tready = ({name}_size > 0);\n".format(
-                name=axis['name'])
+            ).format(name=name)
 
-        bus_transfer = ""
+            offset = 0
+            for port in ['tdata', 'tuser', 'tlast']:
+                width = axis[port]
+                if width <= 0:
+                    pass
+                elif width <= 32:
+                    axis_stage1 += (
+                        "            block->impl.{name}_{port} = {name}_data[{offset}];\n"
+                    ).format(name=name, port=port, offset=offset)
+                    offset += 1
+                elif width <= 64:
+                    axis_stage1 += (
+                        "            block->impl.{name}_{port} = get_qdata({name}_data + {offset});\n"
+                    ).format(name=name, port=port, offset=offset)
+                    offset += 2
+                else:
+                    for i in range((width + 31) // 32):
+                        axis_stage1 += (
+                            "            block->impl.{name}_{port}[{index}] = {name}_data[{offset}];\n"
+                        ).format(name=name, port=port, index=i, offset=offset)
+                        offset += 1
+
+            assert(ports['input_vlens'][idx] == offset)
+            axis_stage1 += (
+                "            block->impl.{name}_tvalid = 1;\n"
+                "            {name}_data += {offset};\n"
+                "            {name}_size -= 1;\n"
+                "            idle = 0;\n"
+                "        }}\n"
+            ).format(name=name, offset=offset)
+
+        for axis in ports['outputs']:
+            axis_stage1 += (
+                "        block->impl.{name}_tready = {name}_size > 0 ? 1 : 0;\n"
+            ).format(name=axis['name'])
+
+        axis_stage2 = ""
+
+        for axis in ports['inputs']:
+            name = axis['name']
+            axis_stage2 += (
+                "        {name}_step = (block->impl.{name}_tvalid != 0 && block->impl.{name}_tready != 0);\n"
+            ).format(name=axis['name'])
+
+        for idx, axis in enumerate(ports['outputs']):
+            name = axis['name']
+
+            axis_stage2 += (
+                "        if (block->impl.{name}_tvalid != 0 && block->impl.{name}_tready != 0)\n"
+                "        {{\n"
+            ).format(name=name)
+
+            offset = 0
+            for port in ['tdata', 'tuser', 'tlast']:
+                width = axis[port]
+                if width <= 0:
+                    pass
+                elif width <= 32:
+                    axis_stage2 += (
+                        "            {name}_data[{offset}] = block->impl.{name}_{port};\n"
+                    ).format(name=name, port=port, offset=offset)
+                    offset += 1
+                elif width <= 64:
+                    axis_stage2 += (
+                        "            set_qdata({name}_data + {offset}, block->impl.{name}_{port});\n"
+                    ).format(name=name, port=port, offset=offset)
+                    offset += 2
+                else:
+                    for i in range((width + 31) // 32):
+                        axis_stage2 += (
+                            "            {name}_data[{offset}] = block->impl.{name}_{port}[{index}];\n"
+                        ).format(name=name, port=port, index=i, offset=offset)
+                        offset += 1
+
+            assert(ports['output_vlens'][idx] == offset)
+            axis_stage2 += (
+                "            {name}_data += {offset};\n"
+                "            {name}_size -= 1;\n"
+                "            idle = 0;\n"
+                "        }}\n"
+            ).format(name=name, offset=offset)
+
+        axis_stage3 = ""
+        for axis in ports['inputs']:
+            axis_stage3 += (
+                "        if ({name}_step)\n"
+                "            block->impl.{name}_tvalid = 0;\n"
+            ).format(name=axis['name'])
+
+        write_sizes = ""
         for idx, axis in enumerate(ports['inputs']):
-            bus_transfer += Module._INPUT_TRANSFER_TERMPLATE.format(
-                bus=axis['name'],
-                idx=idx)
+            write_sizes += (
+                "    input_sizes[{idx}] -= {name}_size;\n"
+            ).format(name=axis['name'], idx=idx)
+        for idx, axis in enumerate(ports['outputs']):
+            write_sizes += (
+                "    output_sizes[{idx}] -= {name}_size;\n"
+            ).format(name=axis['name'], idx=idx)
 
         config = {
             'component': self.component,
             'params': params,
-            'input_vlens': [Module._get_vlen(bus) for bus in ports['inputs']],
-            'output_vlens': [Module._get_vlen(bus) for bus in ports['outputs']],
         }
         config.update(ports)
         config = json.dumps(config, ensure_ascii=True)
@@ -453,10 +505,12 @@ extern "C" void work_block(Block *block,
             config=config,
             set_clocks=set_clocks,
             set_resets=set_resets,
-            bus_disable=bus_disable,
-            bus_prepare=bus_prepare,
-            bus_transfer=bus_transfer,
-            local_vars=local_vars,
+            axis_disable=axis_disable,
+            read_sizes=read_sizes,
+            axis_stage1=axis_stage1,
+            axis_stage2=axis_stage2,
+            axis_stage3=axis_stage3,
+            write_sizes=write_sizes,
         )
 
         filename = os.path.join(obj_dir, 'wrapper.cpp')
@@ -564,9 +618,6 @@ class Instance:
         buffers and returns the number of consumed and produced items.
         """
 
-        output_items[0][0] = 10
-        output_items[0][1] = 11
-
         assert len(input_items) == len(self.input_vlens)
         for i, a in enumerate(input_items):
             assert a.ndim == 2 and a.shape[1] == self.input_vlens[i]
@@ -585,32 +636,48 @@ class Instance:
                             self._input_items,
                             self._output_items)
 
+        consumed = list(self._input_sizes)
+        produced = list(self._output_sizes)
+
         for i in range(len(self._input_items)):
             self._input_items[i] = None
 
         for i in range(len(self._output_items)):
             self._output_items[i] = None
 
-        print(output_items)
+        return consumed, produced
 
 
 LIBRARY = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'library'))
 
 
-def test():
+def test1():
     mod = Module([
-        # os.path.join(LIBRARY, 'axis_copy_cdc', 'axis_copy_cdc.v'),
+        os.path.join(LIBRARY, 'axis_copy_cdc', 'axis_copy_cdc.v'),
+    ])
+
+    ins = Instance(mod, {'DATA_WIDTH': 64})
+
+    input_item0 = numpy.array([[1, 2], [3, 4], [5, 6]], dtype=numpy.int32)
+    output_item0 = numpy.empty((5, 2), dtype=numpy.int32)
+    consumed, produced = ins.work([input_item0], [output_item0])
+    print(consumed, produced)
+
+
+def test2():
+    mod = Module([
         os.path.join(LIBRARY, 'axis_vector_sum', 'axis_vector_sum.v'),
     ])
 
     ins = Instance(mod, {'NUM_VECTORS': 32})
-    print(ins.config)
+    # print(ins.config)
 
     input_item0 = numpy.array([[1], [2], [3]], dtype=numpy.int32)
     output_item0 = numpy.empty((5, 3), dtype=numpy.int32)
-    ins.work([input_item0], [output_item0])
+    consumed, produced = ins.work([input_item0], [output_item0])
+    print(consumed, produced)
 
 
 if __name__ == '__main__':
-    test()
+    test1()
