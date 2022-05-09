@@ -321,12 +321,11 @@ extern "C" void work_block(Block *block,
 
 {read_sizes}
     int idle = 0;
-    while (idle < 10)
+    while (idle < 20)
     {{
         idle += 1;
 
 {axis_stage1}
-
         set_clocks(block, 0);
         block->impl.eval();
 
@@ -630,6 +629,12 @@ class Instance:
             self._output_sizes[i] = a.shape[0]
             self._output_items[i] = a.ctypes.data
 
+        if False:
+            print("input_sizes", list(self._input_sizes))
+            print("output_sizes", list(self._output_sizes))
+            print("input_items", input_items)
+            print("output_items", output_items)
+
         self.lib.work_block(self.block,
                             self._input_sizes,
                             self._output_sizes,
@@ -638,6 +643,12 @@ class Instance:
 
         consumed = list(self._input_sizes)
         produced = list(self._output_sizes)
+
+        if False:
+            print("consumed", consumed)
+            print("produced", produced)
+            print("input_items", input_items)
+            print("output_items", output_items)
 
         for i in range(len(self._input_items)):
             self._input_items[i] = None

@@ -14,61 +14,59 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from typing import Any, Dict, List
+
 import numpy
+import os
 from gnuradio import gr, blocks
 
+import verilator
 
-class AxisSig():
-    def __init__(self, tdata: int, tuser: int = 0, tlast: int = 0):
-        assert tdata >= 0 and tuser >= 0 and tlast in [0, 1]
-
-        self.tdata = int(tdata)
-        self.tuser = int(tuser)
-        self.tlast = int(tlast)
-
-        self.vlen = (self.tdata + 31) // 32 + \
-            (self.tuser + 31) // 32 + (self.tlast + 31) // 32
-
-    def sig(self):
-        return (numpy.int32, (self.vlen, ))
+LIBRARY = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', 'library'))
 
 
 class AxisBlock(gr.basic_block):
-    def __init__(self):
+    def __init__(self,
+                 sources: List[str],
+                 params: Dict[str, Any]):
+
+        mod = verilator.Module(sources)
+        self.ins = verilator.Instance(mod, params)
+
         gr.basic_block.__init__(
             self,
-            name='Axis Block',
-            in_sig=[
-                AxisSig(32, 0, 0).sig(),
-                AxisSig(11, 0, 1).sig(),
-            ],
-            out_sig=[
-                AxisSig(1, 1, 1).sig()
-            ]
+            name=mod.component,
+            in_sig=[(numpy.int32, (n,)) for n in self.ins.input_vlens],
+            out_sig=[(numpy.int32, (n,)) for n in self.ins.output_vlens],
         )
 
+    def forecast(self, noutput_items, ninputs):
+        # print("forecast", noutput_items, ninputs)
+        return [1 for _ in range(ninputs)]
+
     def general_work(self, input_items, output_items):
-        print([a.shape for a in input_items])
-        print([a.shape for a in output_items])
+        consumed, produced = self.ins.work(input_items, output_items)
 
-        output_items[0][0, :] = [4, 5, 6]
+        for idx, num in enumerate(consumed):
+            self.consume(idx, num)
+        for idx, num in enumerate(produced):
+            self.produce(idx, num)
 
-        self.consume(0, 1)
-        self.consume(1, 1)
-        self.produce(0, 1)
         return gr.WORK_CALLED_PRODUCE
 
 
 def test():
-    source1 = blocks.vector_source_i([1, 2, 3], vlen=1, repeat=False)
-    source2 = blocks.vector_source_i([4, 5, 6, 7], vlen=2, repeat=True)
-    axis = AxisBlock()
-    sink = blocks.vector_sink_i(vlen=3)
+    source = blocks.vector_source_i([1, 2, 3], vlen=1, repeat=False)
+    axis_block = AxisBlock([
+        os.path.join(LIBRARY, 'axis_copy_cdc', 'axis_copy_cdc.v'),
+    ], {
+        'DATA_WIDTH': 32,
+    })
+    sink = blocks.vector_sink_i(vlen=1)
 
     top = gr.top_block()
-    top.connect(source1, (axis, 0))
-    top.connect(source2, (axis, 1))
-    top.connect((axis, 0), sink)
+    top.connect(source, axis_block, sink)
     top.run()
 
     print(sink.data())
