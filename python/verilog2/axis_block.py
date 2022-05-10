@@ -17,8 +17,7 @@
 from typing import Any, Dict, List
 
 import numpy
-import os
-from gnuradio import gr, blocks
+from gnuradio import gr
 
 from . import verilator
 

@@ -1,0 +1,30 @@
+id: 'verilog2_axis_copy_reg'
+label: 'AXIS Copy Reg'
+category: '[Verilog2]'
+flags: [python]
+
+parameters:
+-   id: DATA_WIDTH
+    default: 32
+    dtype: int
+
+inputs:
+-   domain: stream
+    dtype: int
+    vlen: ${(DATA_WIDTH + 31) // 32}
+
+outputs:
+-   domain: stream
+    dtype: int
+    vlen: ${(DATA_WIDTH + 31) // 32}
+
+templates:
+    imports: |-
+        import os
+        from gnuradio import verilog2
+    make: |-
+        verilog2.axis_block(
+            [os.path.join(os.path.dirname(__file__), 'axis_copy_reg.v')],
+            dict(DATA_WIDTH=${DATA_WIDTH}))
+
+file_format: 1

@@ -20,6 +20,8 @@ endif()
 GR_PYTHON_INSTALL(
     FILES
     __init__.py
+    verilator.py
+    axis_block.py
     DESTINATION ${GR_PYTHON_DIR}/gnuradio/verilog2
 )
 

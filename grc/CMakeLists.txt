@@ -7,5 +7,6 @@
 #
 
 install(FILES
+    verilog2_axis_copy_reg.block.yml
     DESTINATION share/gnuradio/grc/blocks
 )
