@@ -19,7 +19,8 @@ import os
 import random
 import time
 
-from gnuradio import gr, gr_unittest, blocks, verilog2
+from gnuradio import gr, gr_unittest, blocks
+import verilog2
 
 
 class qa_axis_block(gr_unittest.TestCase):
@@ -86,6 +87,43 @@ class qa_axis_block(gr_unittest.TestCase):
         assert numpy.alltrue(data2[:, 0] == data1[:, 0])
         assert numpy.alltrue(data2[:, 1] == numpy.arange(
             0, len(data1), dtype=numpy.int32))
+
+    def test4(self):
+        period = 5
+        path = os.path.join(os.path.dirname(__file__), '..', '..', 'examples')
+        block = verilog2.axis_block([
+            os.path.join(path, 'axis_vector_src.v'),
+        ], {
+            'DATA_WIDTH': 16,
+            'PERIOD': period,
+            'READMEMH': os.path.join(path, 'testbench.mem'),
+        })
+        sink = blocks.vector_sink_i(vlen=2, reserve_items=10)
+
+        top = gr.top_block()
+        top.connect(block, sink)
+        top.start()
+        time.sleep(0.01)
+        top.stop()
+        top.wait()
+
+        data = numpy.array(sink.data()).reshape(-1, 2)
+        print("produced", len(data))
+
+        length = data.shape[0] // period * period
+        data = data[:length].reshape(-1, period, 2)
+        print(data)
+        assert numpy.alltrue(data[:, 0, 0] == 0x0123)
+        assert numpy.alltrue(data[:, 1, 0] == 0x4567)
+        assert numpy.alltrue(data[:, 2, 0] == 0x89ab)
+        assert numpy.alltrue(data[:, 3, 0] == 0xcdef)
+        assert numpy.alltrue(data[:, 4, 0] == 0x7777)
+
+        assert numpy.alltrue(data[:, 0, 1] == 0)
+        assert numpy.alltrue(data[:, 1, 1] == 0)
+        assert numpy.alltrue(data[:, 2, 1] == 0)
+        assert numpy.alltrue(data[:, 3, 1] == 0)
+        assert numpy.alltrue(data[:, 4, 1] == 1)
 
 
 if __name__ == '__main__':

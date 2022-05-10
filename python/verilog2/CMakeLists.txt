@@ -32,13 +32,18 @@ include(GrTest)
 
 set(GR_TEST_TARGET_DEPS gnuradio-verilog2)
 
-# Create a package directory that tests can import. It includes everything
-# from `python/`.
-add_custom_target(
-  copy_module_for_tests ALL
-  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}
-          ${CMAKE_BINARY_DIR}/test_modules/gnuradio/verilog2/
-)
+if(NOT APPLE)
+    # Create a package directory that tests can import. It includes everything
+    # from `python/`.
+    add_custom_target(
+    copy_module_for_tests ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_BINARY_DIR}/test_modules/verilog2/
+    )
+
+    # hack the LD_LIBRARY_PATH to include the copied in libraries
+    set(GR_TEST_LIBRARY_DIRS ${CMAKE_BINARY_DIR}/test_modules/xtremis/)
+endif(NOT APPLE)
 
 GR_ADD_TEST(qa_verilator ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_verilator.py)
 GR_ADD_TEST(qa_axis_block ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_axis_block.py)

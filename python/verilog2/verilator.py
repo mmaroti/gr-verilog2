@@ -118,8 +118,12 @@ class Module:
             '--Mdir', obj_dir,
             '-o', 'lib{}.so'.format(self.component),
         ]
-        command.extend(['-G{}={}'.format(key, str(val))
+
+        def quote(val):
+            return '"' + val + '"' if isinstance(val, str) else str(val)
+        command.extend(['-G{}={}'.format(key, quote(val))
                         for key, val in params.items()])
+
         command.extend(self.sources)
         command.append('wrapper.cpp')
 

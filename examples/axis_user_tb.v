@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2017-2021, Miklos Maroti
+ * Copyright (C) 2022, Miklos Maroti
  *
  * This source describes Open Hardware and is licensed under the CERN-OHL-S v2.
  * You may redistribute and modify this source and make products using it under
@@ -17,6 +17,8 @@ module axis_chain_tb #(
 	parameter USER_WIDTH = 8
 ) (
 	input wire clock,
+
+	(* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_HIGH" *)
 	input wire reset,
 
 	input wire [DATA_WIDTH-1:0] s_tdata,

@@ -18,7 +18,8 @@ import numpy
 import os
 import random
 
-from gnuradio import gr_unittest, verilog2
+from gnuradio import gr_unittest
+import verilog2
 
 
 class qa_verilator(gr_unittest.TestCase):
