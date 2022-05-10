@@ -128,7 +128,7 @@ class Module:
         result.check_returncode()
         assert(os.path.exists(header))
 
-    _RE_PORT = re.compile(r'^\s*VL_(IN|OUT)(|8|16|32|64)\((\w+),(\d+),(\d+)\)')
+    _RE_PORT = re.compile(r'^\s*VL_(IN|OUT)(|8|16|32|64|W)\((\w+),(\d+),(\d+)(,\d+)?\)')
 
     def _parse_ports_job(self, obj_dir: str) -> Dict[str, Any]:
         header_path = os.path.join(obj_dir, self.component + '.h')
@@ -237,11 +237,11 @@ class Module:
             + (bus['tuser'] + 31) // 32 \
             + (bus['tlast'] + 31) // 32
 
-    def get_input_vlen(self, params: Dict[str, Any], bus: int) -> int:
-        return Module._get_vlen(self.get_ports(params)['inputs'][bus])
+    def get_input_vlens(self, params: Dict[str, Any]) -> List[int]:
+        return self.get_ports(params)['input_vlens']
 
-    def get_output_vlen(self, params: Dict[str, Any], bus: int) -> int:
-        return Module._get_vlen(self.get_ports(params)['outputs'][bus])
+    def get_output_vlens(self, params: Dict[str, Any]) -> List[int]:
+        return self.get_ports(params)['output_vlens']
 
     _WRAPPER_TEMPLATE = """// Generated, do not modify!
 
@@ -657,25 +657,3 @@ class Instance:
             self._output_items[i] = None
 
         return consumed, produced
-
-
-LIBRARY = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), '..', '..', 'examples'))
-
-
-def test():
-    mod = Module([
-        os.path.join(os.path.dirname(__file__), '..',
-                     '..', 'examples', 'axis_copy_reg.v'),
-    ])
-
-    ins = Instance(mod, {'DATA_WIDTH': 64})
-
-    input_item0 = numpy.array([[1, 2], [3, 4], [5, 6]], dtype=numpy.int32)
-    output_item0 = numpy.empty((5, 2), dtype=numpy.int32)
-    consumed, produced = ins.work([input_item0], [output_item0])
-    print(consumed, produced)
-
-
-if __name__ == '__main__':
-    test()
