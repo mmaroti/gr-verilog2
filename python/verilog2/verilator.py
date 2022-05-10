@@ -660,12 +660,13 @@ class Instance:
 
 
 LIBRARY = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), '..', 'library'))
+    os.path.dirname(__file__), '..', '..', 'examples'))
 
 
-def test1():
+def test():
     mod = Module([
-        os.path.join(LIBRARY, 'axis_copy_cdc', 'axis_copy_cdc.v'),
+        os.path.join(os.path.dirname(__file__), '..',
+                     '..', 'examples', 'axis_copy_reg.v'),
     ])
 
     ins = Instance(mod, {'DATA_WIDTH': 64})
@@ -676,19 +677,5 @@ def test1():
     print(consumed, produced)
 
 
-def test2():
-    mod = Module([
-        os.path.join(LIBRARY, 'axis_vector_sum', 'axis_vector_sum.v'),
-    ])
-
-    ins = Instance(mod, {'NUM_VECTORS': 32})
-    # print(ins.config)
-
-    input_item0 = numpy.array([[1], [2], [3]], dtype=numpy.int32)
-    output_item0 = numpy.empty((5, 3), dtype=numpy.int32)
-    consumed, produced = ins.work([input_item0], [output_item0])
-    print(consumed, produced)
-
-
 if __name__ == '__main__':
-    test1()
+    test()

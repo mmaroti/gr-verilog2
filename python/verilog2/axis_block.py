@@ -22,9 +22,6 @@ from gnuradio import gr, blocks
 
 import verilator
 
-LIBRARY = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), '..', 'library'))
-
 
 class AxisBlock(gr.basic_block):
     def __init__(self,
@@ -59,7 +56,8 @@ class AxisBlock(gr.basic_block):
 def test():
     source = blocks.vector_source_i([1, 2, 3], vlen=1, repeat=False)
     axis_block = AxisBlock([
-        os.path.join(LIBRARY, 'axis_copy_cdc', 'axis_copy_cdc.v'),
+        os.path.join(os.path.dirname(__file__), '..',
+                     '..', 'examples', 'axis_copy_reg.v'),
     ], {
         'DATA_WIDTH': 32,
     })
