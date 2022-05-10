@@ -68,6 +68,47 @@ class qa_verilator(gr_unittest.TestCase):
         print("output", output_item0[:length].flatten())
         assert numpy.alltrue(output_item0[:length] == input_item0 % 256)
 
+    def test3(self):
+        mod = verilog2.Module(qa_verilator.SOURCES)
+        ins = verilog2.Instance(mod, {'DATA_WIDTH': 33})
+
+        length = 10
+        input_item0 = numpy.random.randint(
+            0, 1000, size=(length, 2), dtype=numpy.int32)
+        output_item0 = numpy.empty((length + 10, 2), dtype=numpy.int32)
+
+        consumed, produced = ins.work([input_item0], [output_item0])
+        print("consumed", consumed)
+        print("produced", produced)
+        assert consumed == [length]
+        assert produced == [length]
+
+        print("input", input_item0)
+        print("output", output_item0[:length])
+        assert numpy.alltrue(output_item0[:length, 0] == input_item0[:, 0])
+        assert numpy.alltrue(output_item0[:length, 1] == input_item0[:, 1] % 2)
+
+    def test4(self):
+        mod = verilog2.Module(qa_verilator.SOURCES)
+        ins = verilog2.Instance(mod, {'DATA_WIDTH': 65})
+
+        length = 10
+        input_item0 = numpy.random.randint(
+            0, 1000, size=(length, 3), dtype=numpy.int32)
+        output_item0 = numpy.empty((length + 10, 3), dtype=numpy.int32)
+
+        consumed, produced = ins.work([input_item0], [output_item0])
+        print("consumed", consumed)
+        print("produced", produced)
+        assert consumed == [length]
+        assert produced == [length]
+
+        print("input", input_item0)
+        print("output", output_item0[:length])
+        assert numpy.alltrue(output_item0[:length, 0] == input_item0[:, 0])
+        assert numpy.alltrue(output_item0[:length, 1] == input_item0[:, 1])
+        assert numpy.alltrue(output_item0[:length, 2] == input_item0[:, 2] % 2)
+
 
 if __name__ == '__main__':
     gr_unittest.run(qa_verilator)

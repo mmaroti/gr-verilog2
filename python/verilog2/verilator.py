@@ -461,20 +461,26 @@ extern "C" void work_block(Block *block,
                     pass
                 elif width <= 32:
                     axis_stage2 += (
-                        "            {name}_data[{offset}] = block->impl.{name}_{port};\n"
-                    ).format(name=name, port=port, offset=offset)
+                        "            {name}_data[{offset}] = block->impl.{name}_{port} & 0x{mask:x}u;\n"
+                    ).format(name=name, port=port, offset=offset, mask=(1 << width)-1)
                     offset += 1
                 elif width <= 64:
                     axis_stage2 += (
-                        "            set_qdata({name}_data + {offset}, block->impl.{name}_{port});\n"
-                    ).format(name=name, port=port, offset=offset)
+                        "            set_qdata({name}_data + {offset}, block->impl.{name}_{port} & 0x{mask:x}ul);\n"
+                    ).format(name=name, port=port, offset=offset, mask=(1 << width)-1)
                     offset += 2
                 else:
-                    for i in range((width + 31) // 32):
+                    count = (width + 31) // 32
+                    for i in range(count - 1):
                         axis_stage2 += (
                             "            {name}_data[{offset}] = block->impl.{name}_{port}[{index}];\n"
                         ).format(name=name, port=port, index=i, offset=offset)
                         offset += 1
+                    axis_stage2 += (
+                        "            {name}_data[{offset}] = block->impl.{name}_{port}[{index}] & 0x{mask:x}u;\n"
+                    ).format(name=name, port=port, index=count - 1, offset=offset,
+                             mask=(1 << (width + 32 - 32*count)) - 1)
+                    offset += 1
 
             assert(ports['output_vlens'][idx] == offset)
             axis_stage2 += (
