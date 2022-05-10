@@ -63,6 +63,30 @@ class qa_axis_block(gr_unittest.TestCase):
         assert numpy.alltrue(data == numpy.arange(
             0, len(data), dtype=numpy.int32) % 256)
 
+    def test3(self):
+        path = os.path.join(os.path.dirname(__file__), '..', '..', 'examples')
+        block = verilog2.axis_block([
+            os.path.join(path, 'axis_user_tb.v'),
+            os.path.join(path, 'axis_counter.v'),
+            os.path.join(path, 'axis_copy_reg.v'),
+        ], {'DATA_WIDTH': 16, 'USER_WIDTH': 8})
+
+        data1 = numpy.random.randint(0, 1000, size=(10, 1))
+        source = blocks.vector_source_i(data1.flatten(), vlen=1, repeat=False)
+        sink = blocks.vector_sink_i(vlen=2, reserve_items=10)
+
+        top = gr.top_block()
+        top.connect(source, block, sink)
+        top.run()
+
+        data2 = numpy.array(sink.data()).reshape((-1, 2))
+        print(data1)
+        print(data2)
+
+        assert numpy.alltrue(data2[:, 0] == data1[:, 0])
+        assert numpy.alltrue(data2[:, 1] == numpy.arange(
+            0, len(data1), dtype=numpy.int32))
+
 
 if __name__ == '__main__':
     gr_unittest.run(qa_axis_block)
