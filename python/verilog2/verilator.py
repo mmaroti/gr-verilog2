@@ -596,7 +596,7 @@ class Instance:
         self._input_sizes = (ctypes.c_int64 * len(self.input_vlens))()
         self._output_sizes = (ctypes.c_int64 * len(self.output_vlens))()
         self._input_items = (Module.CTYPES_ITEMS * len(self.input_vlens))()
-        self._output_items = (Module.CTYPES_ITEMS * len(self.input_vlens))()
+        self._output_items = (Module.CTYPES_ITEMS * len(self.output_vlens))()
         self.block = self.lib.create_block()
         self.reset()
 

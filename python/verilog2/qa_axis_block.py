@@ -17,23 +17,22 @@
 import numpy
 import os
 import random
+import time
 
 from gnuradio import gr, gr_unittest, blocks, verilog2
 
 
 class qa_axis_block(gr_unittest.TestCase):
 
-    SOURCES = [
-        os.path.join(os.path.dirname(__file__), '..',
-                     '..', 'examples', 'axis_swap_wire.v'),
-    ]
-
     def test1(self):
         length = random.randint(0, 50)
         data1 = numpy.random.randint(0, 1000, size=(length, 2))
 
         source = blocks.vector_source_i(data1.flatten(), vlen=2, repeat=False)
-        block = verilog2.axis_block(qa_axis_block.SOURCES, {'DATA_WIDTH': 32})
+        block = verilog2.axis_block([
+            os.path.join(os.path.dirname(__file__), '..',
+                         '..', 'examples', 'axis_swap_wire.v'),
+        ], {'DATA_WIDTH': 32})
         sink = blocks.vector_sink_i(vlen=2)
 
         top = gr.top_block()
@@ -44,6 +43,25 @@ class qa_axis_block(gr_unittest.TestCase):
         assert data1.shape == data2.shape
         assert numpy.alltrue(data1[:, 0] == data2[:, 1])
         assert numpy.alltrue(data1[:, 1] == data2[:, 0])
+
+    def test2(self):
+        block = verilog2.axis_block([
+            os.path.join(os.path.dirname(__file__), '..',
+                         '..', 'examples', 'axis_counter.v'),
+        ], {'DATA_WIDTH': 8})
+        sink = blocks.vector_sink_i(vlen=1, reserve_items=10)
+
+        top = gr.top_block()
+        top.connect(block, sink)
+        top.start()
+        time.sleep(0.01)
+        top.stop()
+        top.wait()
+
+        data = numpy.array(sink.data()).flatten()
+        print("produced", len(data))
+        assert numpy.alltrue(data == numpy.arange(
+            0, len(data), dtype=numpy.int32) % 256)
 
 
 if __name__ == '__main__':

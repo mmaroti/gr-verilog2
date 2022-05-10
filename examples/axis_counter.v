@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2022, Miklos Maroti
+ * Copyright (C) 2017-2021, Miklos Maroti
  *
  * This source describes Open Hardware and is licensed under the CERN-OHL-S v2.
  * You may redistribute and modify this source and make products using it under
@@ -13,24 +13,31 @@
 `default_nettype none
 
 /**
- * Takes a pair of items, each DATA_WIDTH wide, and swaps them. This is
- * implemented with simple wires and no clocks are required.
+ * Just a simple counter producing output through an axis interface. The
+ * couter is incremented when m_tready is true.
  */
-module axis_swap_wire #(
-	parameter DATA_WIDTH = 8
+module axis_counter #(
+	parameter DATA_WIDTH = 16
 ) (
-	input wire [2*DATA_WIDTH-1:0] s_tdata,
-	input wire s_tvalid,
-	output wire s_tready,
+	input wire clock,
 
-	output wire [2*DATA_WIDTH-1:0] m_tdata,
+	(* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_HIGH" *)
+	input wire reset,
+
+	output reg [DATA_WIDTH-1:0] m_tdata,
 	output wire m_tvalid,
 	input wire m_tready
 );
 
-assign s_tready = m_tready;
-assign m_tdata = {s_tdata[DATA_WIDTH-1:0], s_tdata[2*DATA_WIDTH-1:DATA_WIDTH]};
-assign m_tvalid = s_tvalid;
+assign m_tvalid = 1'b1;
+
+always @(posedge clock)
+begin
+	if (reset)
+		m_tdata <= 0;
+	else if (m_tready)
+		m_tdata <= m_tdata + 1;
+end
 
 endmodule
 
