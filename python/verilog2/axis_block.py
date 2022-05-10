@@ -20,10 +20,10 @@ import numpy
 import os
 from gnuradio import gr, blocks
 
-import verilator
+from . import verilator
 
 
-class AxisBlock(gr.basic_block):
+class axis_block(gr.basic_block):
     def __init__(self,
                  sources: List[str],
                  params: Dict[str, Any]):
@@ -51,24 +51,3 @@ class AxisBlock(gr.basic_block):
             self.produce(idx, num)
 
         return gr.WORK_CALLED_PRODUCE
-
-
-def test():
-    source = blocks.vector_source_i([1, 2, 3], vlen=1, repeat=False)
-    axis_block = AxisBlock([
-        os.path.join(os.path.dirname(__file__), '..',
-                     '..', 'examples', 'axis_copy_reg.v'),
-    ], {
-        'DATA_WIDTH': 32,
-    })
-    sink = blocks.vector_sink_i(vlen=1)
-
-    top = gr.top_block()
-    top.connect(source, axis_block, sink)
-    top.run()
-
-    print(sink.data())
-
-
-if __name__ == '__main__':
-    test()

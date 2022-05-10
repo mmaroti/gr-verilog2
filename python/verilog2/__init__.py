@@ -9,3 +9,4 @@ This is the GNU Radio VERILOG2 module.
 '''
 
 from .verilator import Module, Instance
+from .axis_block import axis_block

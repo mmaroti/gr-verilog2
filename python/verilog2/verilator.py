@@ -91,7 +91,7 @@ class Module:
 
     def _get_obj_dir(self, params: Dict[str, Any]) -> str:
         hash = hashlib.md5(str(params).encode('utf-8')).hexdigest()
-        return os.path.join(self.build_dir, 'verilator-' + hash)
+        return os.path.join(self.build_dir, self.component + '-' + hash)
 
     def _verilator_job(self, params: Dict[str, Any]):
         obj_dir = self._get_obj_dir(params)
@@ -369,7 +369,8 @@ extern "C" void work_block(Block *block,
         for name in ports['resets']:
             set_resets += "    block->impl.{} = value;\n".format(name)
         for name in ports['resetns']:
-            set_resets += "    block->impl.{} = value == 0 ? 1 : 0;\n".format(name)
+            set_resets += "    block->impl.{} = value == 0 ? 1 : 0;\n".format(
+                name)
 
         axis_disable = ""
         for axis in ports['inputs']:

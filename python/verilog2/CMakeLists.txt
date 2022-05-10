@@ -39,3 +39,4 @@ add_custom_target(
 )
 
 GR_ADD_TEST(qa_verilator ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_verilator.py)
+GR_ADD_TEST(qa_axis_block ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_axis_block.py)

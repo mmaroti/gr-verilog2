@@ -23,13 +23,13 @@ from gnuradio import gr_unittest, verilog2
 
 class qa_verilator(gr_unittest.TestCase):
 
-    AXIS_COPY_REG = [
+    SOURCES = [
         os.path.join(os.path.dirname(__file__), '..',
                      '..', 'examples', 'axis_copy_reg.v'),
     ]
 
     def test1(self):
-        mod = verilog2.Module(qa_verilator.AXIS_COPY_REG)
+        mod = verilog2.Module(qa_verilator.SOURCES)
         print(mod.get_ports({}))
         assert(mod.get_input_vlens({}) == [1])
 
@@ -49,24 +49,24 @@ class qa_verilator(gr_unittest.TestCase):
         assert(mod.get_output_vlens({'DATA_WIDTH': 65}) == [3])
 
     def test2(self):
-        mod = verilog2.Module(qa_verilator.AXIS_COPY_REG)
+        mod = verilog2.Module(qa_verilator.SOURCES)
         ins = verilog2.Instance(mod, {'DATA_WIDTH': 8})
 
-        len = random.randint(0, 50)
+        length = random.randint(0, 50)
         input_item0 = numpy.random.randint(
-            0, 1000, size=(len, 1), dtype=numpy.int32)
-        output_item0 = numpy.empty((len + 10, 1), dtype=numpy.int32)
+            0, 1000, size=(length, 1), dtype=numpy.int32)
+        output_item0 = numpy.empty((length + 10, 1), dtype=numpy.int32)
 
         consumed, produced = ins.work([input_item0], [output_item0])
         print("consumed", consumed)
         print("produced", produced)
-        assert consumed == [len]
-        assert produced == [len]
+        assert consumed == [length]
+        assert produced == [length]
 
         print("input", input_item0.flatten())
         print("input mod 256", input_item0.flatten() % 256)
-        print("output", output_item0[:len].flatten())
-        assert numpy.alltrue(output_item0[:len] == input_item0 % 256)
+        print("output", output_item0[:length].flatten())
+        assert numpy.alltrue(output_item0[:length] == input_item0 % 256)
 
 
 if __name__ == '__main__':
