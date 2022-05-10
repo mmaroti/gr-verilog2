@@ -18,22 +18,13 @@
  * can move data on every clock, and all its outputs are registered (including
  * s_tready). This means, that it will store the accepted input value in an
  * internal buffer when both s_tready and s_tvalid are true and m_tready is
- * false. The pending output is either 0, 1 or 2. It is 0 if the register is
- * empty so no data is in flight. It is 1 in the steady state when the output
- * is the old input value. It is 2 when the last output was not consumed but
- * the input was accepted into an internal buffer.
+ * false.
  */
 module axis_copy_reg #(
 	parameter DATA_WIDTH = 8
 ) (
-`ifdef FORMAL
-	output integer pending,
-`endif
-
 	input wire clock,
-
-	(* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_HIGH" *)
-	input wire reset,
+	input wire resetn,
 
 	input wire [DATA_WIDTH-1:0] s_tdata,
 	input wire s_tvalid,
@@ -50,9 +41,6 @@ module axis_copy_reg #(
  * !s_tready && m_tvalid: buffer is full, m_tdata is full
  * !s_tready && !m_tvalid: cannot happen
  */
-`ifdef FORMAL
-assign pending = {!s_tready, s_tready && m_tvalid};
-`endif
 
 reg [DATA_WIDTH-1:0] buffer;
 
@@ -70,7 +58,7 @@ end
 
 always @(posedge clock)
 begin
-	if (reset)
+	if (!resetn)
 		m_tvalid <= 1'b0;
 	else
 		m_tvalid <= (m_tvalid && !m_tready) || !s_tready || s_tvalid;
@@ -78,7 +66,7 @@ end
 
 always @(posedge clock)
 begin
-	if (reset)
+	if (!resetn)
 		s_tready <= 1'b1;
 	else
 		s_tready <= !m_tvalid || m_tready || (s_tready && !s_tvalid);

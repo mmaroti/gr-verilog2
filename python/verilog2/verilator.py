@@ -128,7 +128,8 @@ class Module:
         result.check_returncode()
         assert(os.path.exists(header))
 
-    _RE_PORT = re.compile(r'^\s*VL_(IN|OUT)(|8|16|32|64|W)\((\w+),(\d+),(\d+)(,\d+)?\)')
+    _RE_PORT = re.compile(
+        r'^\s*VL_(IN|OUT)(|8|16|32|64|W)\((\w+),(\d+),(\d+)(,\d+)?\)')
 
     def _parse_ports_job(self, obj_dir: str) -> Dict[str, Any]:
         header_path = os.path.join(obj_dir, self.component + '.h')
@@ -141,6 +142,7 @@ class Module:
 
         clocks = []
         resets = []
+        resetns = []
         buses = {}
 
         def axis(dir, name, width):
@@ -180,6 +182,9 @@ class Module:
                 elif name.endswith('reset') or name.endswith('rst'):
                     assert dir == 'IN' and width == 1
                     resets.append(name)
+                elif name.endswith('resetn') or name.endswith('rstn'):
+                    assert dir == 'IN' and width == 1
+                    resetns.append(name)
                 elif axis(dir, name, width):
                     pass
                 else:
@@ -187,6 +192,7 @@ class Module:
 
         clocks = sorted(clocks)
         resets = sorted(resets)
+        resetns = sorted(resetns)
 
         for bus in buses.values():
             assert 'tvalid' in bus and 'tready' in bus
@@ -213,6 +219,7 @@ class Module:
         ports = {
             'clocks': clocks,
             'resets': resets,
+            'resetns': resetns,
             'inputs': inputs,
             'outputs': outputs,
             'input_vlens': input_vlens,
@@ -361,6 +368,8 @@ extern "C" void work_block(Block *block,
         set_resets = ""
         for name in ports['resets']:
             set_resets += "    block->impl.{} = value;\n".format(name)
+        for name in ports['resetns']:
+            set_resets += "    block->impl.{} = value == 0 ? 1 : 0;\n".format(name)
 
         axis_disable = ""
         for axis in ports['inputs']:
