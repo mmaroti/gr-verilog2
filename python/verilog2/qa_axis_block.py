@@ -50,7 +50,7 @@ class qa_axis_block(gr_unittest.TestCase):
             os.path.join(os.path.dirname(__file__), '..',
                          '..', 'examples', 'axis_counter.v'),
         ], {'DATA_WIDTH': 8})
-        sink = blocks.vector_sink_i(vlen=1, reserve_items=10)
+        sink = blocks.vector_sink_i(vlen=1)
 
         top = gr.top_block()
         top.connect(block, sink)
@@ -74,7 +74,7 @@ class qa_axis_block(gr_unittest.TestCase):
 
         data1 = numpy.random.randint(0, 1000, size=(10, 1))
         source = blocks.vector_source_i(data1.flatten(), vlen=1, repeat=False)
-        sink = blocks.vector_sink_i(vlen=2, reserve_items=10)
+        sink = blocks.vector_sink_i(vlen=2)
 
         top = gr.top_block()
         top.connect(source, block, sink)
@@ -98,7 +98,7 @@ class qa_axis_block(gr_unittest.TestCase):
             'PERIOD': period,
             'READMEMH': os.path.join(path, 'testbench.mem'),
         })
-        sink = blocks.vector_sink_i(vlen=2, reserve_items=10)
+        sink = blocks.vector_sink_i(vlen=2)
 
         top = gr.top_block()
         top.connect(block, sink)

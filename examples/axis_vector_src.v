@@ -31,11 +31,10 @@ module axis_vector_src #(
 	input wire m_tready
 );
 
-initial
-begin
+generate
 	if (PERIOD <= 1)
 		$error("PERIOD must be at least two");
-end
+endgenerate
 
 localparam ADDR_WIDTH = $clog2(PERIOD); // $clog2(4) = 2, $clog2(5) = 3
 localparam [ADDR_WIDTH-1:0] LAST = PERIOD[ADDR_WIDTH-1:0] - 1;
