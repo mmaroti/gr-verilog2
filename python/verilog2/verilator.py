@@ -303,6 +303,7 @@ class Module:
     _WRAPPER_TEMPLATE = """// Generated, do not modify!
 
 #include <iostream>
+#include <mutex>
 #include "{component}.h"
 
 const wchar_t *CONFIG = L"{config}";
@@ -315,6 +316,7 @@ extern "C" const wchar_t *config()
 struct Block
 {{
     const wchar_t *config = CONFIG;
+    std::mutex mutex;
     {component} impl;
 }};
 
@@ -327,8 +329,12 @@ extern "C" Block *create_block()
 extern "C" void destroy_block(Block *block)
 {{
     std::cout << "destroy_block: {component}\\n";
-    assert(block != nullptr && block->config == CONFIG);
-    block->config = nullptr;
+    assert(block != nullptr);
+    {{
+        std::lock_guard<std::mutex> lock(block->mutex);
+        assert(block->config == CONFIG);
+        block->config = nullptr;
+    }}
     delete block;
 }}
 
@@ -342,16 +348,17 @@ void set_resets(Block *block, int value)
 
 extern "C" void reset_block(Block *block)
 {{
-    assert(block != nullptr && block->config == CONFIG);
+    assert(block != nullptr);
+    std::lock_guard<std::mutex> lock(block->mutex);
+    assert(block->config == CONFIG);
 
+{disable}
     set_resets(block, 1);
-{axis_disable}
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i <= 4; i++)
     {{
         set_clocks(block, i & 1);
         block->impl.eval();
     }}
-
     set_resets(block, 0);
 }}
 
@@ -374,7 +381,9 @@ extern "C" void work_block(Block *block,
                            int32_t **input_items,
                            int32_t **output_items)
 {{
-    assert(block != nullptr && block->config == CONFIG);
+    assert(block != nullptr);
+    std::lock_guard<std::mutex> lock(block->mutex);
+    assert(block->config == CONFIG);
 
 {read_sizes}
     int idle = 0;
@@ -383,25 +392,43 @@ extern "C" void work_block(Block *block,
         idle += 1;
 
 {axis_stage1}
-        set_clocks(block, 0);
-        block->impl.eval();
-
-{axis_stage2}
         set_clocks(block, 1);
         block->impl.eval();
 
-{axis_stage3}    }}
+{axis_stage2}
+        set_clocks(block, 0);
+        block->impl.eval();
+    }}
 
 {write_sizes}}}
 
 extern "C" uint64_t read_register(Block *block, uint32_t reg)
 {{
-    assert(block != nullptr && block->config == CONFIG);
+    assert(block != nullptr);
+    std::lock_guard<std::mutex> lock(block->mutex);
+    assert(block->config == CONFIG);
+
     uint64_t value = 0;
 
 {read_regs}
     return value;
 }}
+
+extern "C" void write_register(Block *block, uint32_t reg, uint64_t value)
+{{
+    assert(block != nullptr);
+    std::lock_guard<std::mutex> lock(block->mutex);
+    assert(block->config == CONFIG);
+
+{disable}
+{write_regs}
+    set_clocks(block, 1);
+    block->impl.eval();
+
+    set_clocks(block, 0);
+    block->impl.eval();
+
+{disable}}}
 """
 
     def _compile_job(self, params: Dict[str, Any]):
@@ -431,13 +458,16 @@ extern "C" uint64_t read_register(Block *block, uint32_t reg)
             set_resets += "    block->impl.{} = value == 0 ? 1 : 0;\n".format(
                 name)
 
-        axis_disable = ""
+        disable = ""
         for axis in ports['inputs']:
-            axis_disable += "    block->impl.{}_tvalid = 0;\n".format(
+            disable += "    block->impl.{}_tvalid = 0;\n".format(
                 axis['name'])
         for axis in ports['outputs']:
-            axis_disable += "    block->impl.{}_tready = 0;\n".format(
+            disable += "    block->impl.{}_tready = 0;\n".format(
                 axis['name'])
+        for dreg in ports['registers']:
+            disable += "    block->impl.{}_dset = 0;\n".format(
+                dreg['name'])
 
         read_sizes = ""
         for idx, axis in enumerate(ports['inputs']):
@@ -454,61 +484,16 @@ extern "C" uint64_t read_register(Block *block, uint32_t reg)
 
         axis_stage1 = ""
 
-        for idx, axis in enumerate(ports['inputs']):
-            name = axis['name']
-            axis_stage1 += (
-                "        if (block->impl.{name}_tvalid == 0 && {name}_size > 0)\n"
-                "        {{\n"
-            ).format(name=name)
-
-            offset = 0
-            for port in ['tdata', 'tuser', 'tlast']:
-                width = axis[port]
-                if width <= 0:
-                    pass
-                elif width <= 32:
-                    axis_stage1 += (
-                        "            block->impl.{name}_{port} = {name}_data[{offset}];\n"
-                    ).format(name=name, port=port, offset=offset)
-                    offset += 1
-                elif width <= 64:
-                    axis_stage1 += (
-                        "            block->impl.{name}_{port} = get_qdata({name}_data + {offset});\n"
-                    ).format(name=name, port=port, offset=offset)
-                    offset += 2
-                else:
-                    for i in range((width + 31) // 32):
-                        axis_stage1 += (
-                            "            block->impl.{name}_{port}[{index}] = {name}_data[{offset}];\n"
-                        ).format(name=name, port=port, index=i, offset=offset)
-                        offset += 1
-
-            assert(ports['input_vlens'][idx] == offset)
-            axis_stage1 += (
-                "            block->impl.{name}_tvalid = 1;\n"
-                "            {name}_data += {offset};\n"
-                "            {name}_size -= 1;\n"
-                "            idle = 0;\n"
-                "        }}\n"
-            ).format(name=name, offset=offset)
-
-        for axis in ports['outputs']:
-            axis_stage1 += (
-                "        block->impl.{name}_tready = {name}_size > 0 ? 1 : 0;\n"
-            ).format(name=axis['name'])
-
-        axis_stage2 = ""
-
         for axis in ports['inputs']:
             name = axis['name']
-            axis_stage2 += (
+            axis_stage1 += (
                 "        {name}_step = (block->impl.{name}_tvalid != 0 && block->impl.{name}_tready != 0);\n"
             ).format(name=axis['name'])
 
         for idx, axis in enumerate(ports['outputs']):
             name = axis['name']
 
-            axis_stage2 += (
+            axis_stage1 += (
                 "        if (block->impl.{name}_tvalid != 0 && block->impl.{name}_tready != 0)\n"
                 "        {{\n"
             ).format(name=name)
@@ -519,41 +504,81 @@ extern "C" uint64_t read_register(Block *block, uint32_t reg)
                 if width <= 0:
                     pass
                 elif width <= 32:
-                    axis_stage2 += (
+                    axis_stage1 += (
                         "            {name}_data[{offset}] = block->impl.{name}_{port} & 0x{mask:x}u;\n"
                     ).format(name=name, port=port, offset=offset, mask=(1 << width)-1)
                     offset += 1
                 elif width <= 64:
-                    axis_stage2 += (
+                    axis_stage1 += (
                         "            set_qdata({name}_data + {offset}, block->impl.{name}_{port} & 0x{mask:x}ul);\n"
                     ).format(name=name, port=port, offset=offset, mask=(1 << width)-1)
                     offset += 2
                 else:
                     count = (width + 31) // 32
                     for i in range(count - 1):
-                        axis_stage2 += (
+                        axis_stage1 += (
                             "            {name}_data[{offset}] = block->impl.{name}_{port}[{index}];\n"
                         ).format(name=name, port=port, index=i, offset=offset)
                         offset += 1
-                    axis_stage2 += (
+                    axis_stage1 += (
                         "            {name}_data[{offset}] = block->impl.{name}_{port}[{index}] & 0x{mask:x}u;\n"
                     ).format(name=name, port=port, index=count - 1, offset=offset,
                              mask=(1 << (width + 32 - 32*count)) - 1)
                     offset += 1
 
             assert(ports['output_vlens'][idx] == offset)
-            axis_stage2 += (
+            axis_stage1 += (
                 "            {name}_data += {offset};\n"
                 "            {name}_size -= 1;\n"
                 "            idle = 0;\n"
                 "        }}\n"
             ).format(name=name, offset=offset)
 
-        axis_stage3 = ""
-        for axis in ports['inputs']:
-            axis_stage3 += (
+        axis_stage2 = ""
+
+        for idx, axis in enumerate(ports['inputs']):
+            name = axis['name']
+            axis_stage2 += (
                 "        if ({name}_step)\n"
                 "            block->impl.{name}_tvalid = 0;\n"
+                "        if (block->impl.{name}_tvalid == 0 && {name}_size > 0)\n"
+                "        {{\n"
+            ).format(name=name)
+
+            offset = 0
+            for port in ['tdata', 'tuser', 'tlast']:
+                width = axis[port]
+                if width <= 0:
+                    pass
+                elif width <= 32:
+                    axis_stage2 += (
+                        "            block->impl.{name}_{port} = {name}_data[{offset}];\n"
+                    ).format(name=name, port=port, offset=offset)
+                    offset += 1
+                elif width <= 64:
+                    axis_stage2 += (
+                        "            block->impl.{name}_{port} = get_qdata({name}_data + {offset});\n"
+                    ).format(name=name, port=port, offset=offset)
+                    offset += 2
+                else:
+                    for i in range((width + 31) // 32):
+                        axis_stage2 += (
+                            "            block->impl.{name}_{port}[{index}] = {name}_data[{offset}];\n"
+                        ).format(name=name, port=port, index=i, offset=offset)
+                        offset += 1
+
+            assert(ports['input_vlens'][idx] == offset)
+            axis_stage2 += (
+                "            block->impl.{name}_tvalid = 1;\n"
+                "            {name}_data += {offset};\n"
+                "            {name}_size -= 1;\n"
+                "            idle = 0;\n"
+                "        }}\n"
+            ).format(name=name, offset=offset)
+
+        for axis in ports['outputs']:
+            axis_stage2 += (
+                "        block->impl.{name}_tready = {name}_size > 0 ? 1 : 0;\n"
             ).format(name=axis['name'])
 
         write_sizes = ""
@@ -568,10 +593,27 @@ extern "C" uint64_t read_register(Block *block, uint32_t reg)
 
         read_regs = ""
         for idx, dreg in enumerate(ports['registers']):
-            read_regs += (
-                "    if (reg == {idx})\n"
-                "        value = block->impl.{name}_dout;\n"
-            ).format(idx=idx, name=dreg['name'])
+            if dreg['dout']:
+                read_regs += (
+                    "    if (reg == {idx})\n"
+                    "        value = block->impl.{name}_dout;\n"
+                ).format(idx=idx, name=dreg['name'])
+
+        write_regs = ""
+        for idx, dreg in enumerate(ports['registers']):
+            if dreg['din']:
+                write_regs += (
+                    "    if (reg == {idx})\n"
+                    "    {{\n"
+                    "        block->impl.{name}_din = value;\n"
+                    "        block->impl.{name}_dset = 1;\n"
+                    "    }}\n"
+                ).format(idx=idx, name=dreg['name'])
+            elif dreg['dset']:
+                write_regs += (
+                    "    if (reg == {idx})\n"
+                    "        block->impl.{name}_dset = 1;\n"
+                ).format(idx=idx, name=dreg['name'])
 
         config = {
             'component': self.component,
@@ -586,13 +628,13 @@ extern "C" uint64_t read_register(Block *block, uint32_t reg)
             config=config,
             set_clocks=set_clocks,
             set_resets=set_resets,
-            axis_disable=axis_disable,
+            disable=disable,
             read_sizes=read_sizes,
             axis_stage1=axis_stage1,
             axis_stage2=axis_stage2,
-            axis_stage3=axis_stage3,
             write_sizes=write_sizes,
             read_regs=read_regs,
+            write_regs=write_regs,
         )
 
         filename = os.path.join(obj_dir, 'wrapper.cpp')
@@ -641,6 +683,8 @@ extern "C" uint64_t read_register(Block *block, uint32_t reg)
         ]
         lib.read_register.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
         lib.read_register.restype = ctypes.c_uint64
+        lib.write_register.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint64]
 
         self.lib_cache[lib_path] = (lib, mtime)
         return lib
@@ -756,9 +800,20 @@ class Instance:
 
         return consumed, produced
 
-    def read_reg(self, reg: str) -> int:
+    def read_register(self, name: str) -> int:
         """
-        Reads the current value of the given register.
+        Reads the current value of the given register. This will not
+        generate any clocks, simply returns the current value.
         """
-        idx = self._reg_indices[reg]
+        idx = self._reg_indices[name]
         return self.lib.read_register(self.block, idx)
+
+    def write_register(self, name: str, value: int = 0):
+        """
+        Writes to the given register. This method will run exactly one
+        full clock cycle. You can write to a register that has only
+        DSET and no DIN to reset its value, in which case you can omit
+        the value parameter.
+        """
+        idx = self._reg_indices[name]
+        self.lib.write_register(self.block, idx, value)

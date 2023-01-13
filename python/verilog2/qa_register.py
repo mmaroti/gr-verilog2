@@ -22,7 +22,7 @@ from gnuradio import gr_unittest
 import verilog2
 
 
-class qa_regaccess(gr_unittest.TestCase):
+class qa_register(gr_unittest.TestCase):
 
     SOURCES = [
         os.path.join(os.path.dirname(__file__), '..',
@@ -30,7 +30,7 @@ class qa_regaccess(gr_unittest.TestCase):
     ]
 
     def test1(self):
-        mod = verilog2.Module(qa_regaccess.SOURCES)
+        mod = verilog2.Module(qa_register.SOURCES)
         print(mod.get_ports({}))
         assert(mod.get_input_vlens({}) == [1])
         assert(mod.get_reg_widths({}) == [32, 16])
@@ -53,8 +53,12 @@ class qa_regaccess(gr_unittest.TestCase):
         assert(mod.get_reg_widths({'DATA_WIDTH': 64}) == [32, 64])
 
     def test2(self):
-        mod = verilog2.Module(qa_regaccess.SOURCES)
+        mod = verilog2.Module(qa_register.SOURCES)
         ins = verilog2.Instance(mod, {'DATA_WIDTH': 8})
+
+        ins.write_register("sample", 12)
+        assert ins.read_register("sample") == 12
+        assert ins.read_register("counter") == 0
 
         length = random.randint(0, 50)
         input_item0 = numpy.random.randint(
@@ -71,14 +75,17 @@ class qa_regaccess(gr_unittest.TestCase):
         print("output", output_item0[:length].flatten())
         assert numpy.alltrue(output_item0[:length] == input_item0)
 
-        counter = ins.read_reg('counter')
+        counter = ins.read_register("counter")
         print("counter", counter)
         assert counter == length
 
-        sample = ins.read_reg('sample')
+        sample = ins.read_register("sample")
         print("sample", sample)
         assert length == 0 or sample == input_item0[-1]
 
+        ins.write_register("counter")
+        assert ins.read_register("counter") == 0
+
 
 if __name__ == '__main__':
-    gr_unittest.run(qa_regaccess)
+    gr_unittest.run(qa_register)

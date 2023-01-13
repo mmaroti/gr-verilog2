@@ -51,8 +51,8 @@ class axis_block(gr.basic_block):
 
         return gr.WORK_CALLED_PRODUCE
 
-    def read_reg(self, name: str) -> int:
-        """
-        Reads the current value of the named register of the block.
-        """
-        return self.instance.read_reg(name)
+    def read_register(self, name: str) -> int:
+        return self.instance.read_register(name)
+
+    def write_register(self, name: str, value: int = 0):
+        self.instance.write_register(name, value)

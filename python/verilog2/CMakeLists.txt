@@ -47,4 +47,4 @@ endif(NOT APPLE)
 
 GR_ADD_TEST(qa_verilator ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_verilator.py)
 GR_ADD_TEST(qa_axis_block ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_axis_block.py)
-GR_ADD_TEST(qa_regaccess ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_regaccess.py)
+GR_ADD_TEST(qa_regaccess ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_register.py)
