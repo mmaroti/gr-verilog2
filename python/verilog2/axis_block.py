@@ -27,14 +27,14 @@ class axis_block(gr.basic_block):
                  sources: List[str],
                  params: Dict[str, Any]):
 
-        mod = verilator.Module(sources)
-        self.ins = verilator.Instance(mod, params)
+        module = verilator.Module(sources)
+        self.instance = verilator.Instance(module, params)
 
         gr.basic_block.__init__(
             self,
-            name=mod.component,
-            in_sig=[(numpy.int32, (n,)) for n in self.ins.input_vlens],
-            out_sig=[(numpy.int32, (n,)) for n in self.ins.output_vlens],
+            name=module.component,
+            in_sig=[(numpy.int32, (n,)) for n in self.instance.input_vlens],
+            out_sig=[(numpy.int32, (n,)) for n in self.instance.output_vlens],
         )
 
     def forecast(self, noutput_items, ninputs):
@@ -42,7 +42,7 @@ class axis_block(gr.basic_block):
         return [1 for _ in range(ninputs)]
 
     def general_work(self, input_items, output_items):
-        consumed, produced = self.ins.work(input_items, output_items)
+        consumed, produced = self.instance.work(input_items, output_items)
 
         for idx, num in enumerate(consumed):
             self.consume(idx, num)
@@ -50,3 +50,9 @@ class axis_block(gr.basic_block):
             self.produce(idx, num)
 
         return gr.WORK_CALLED_PRODUCE
+
+    def read_reg(self, name: str) -> int:
+        """
+        Reads the current value of the named register of the block.
+        """
+        return self.instance.read_reg(name)

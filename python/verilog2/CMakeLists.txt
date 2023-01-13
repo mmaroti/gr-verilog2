@@ -42,8 +42,9 @@ if(NOT APPLE)
     )
 
     # hack the LD_LIBRARY_PATH to include the copied in libraries
-    set(GR_TEST_LIBRARY_DIRS ${CMAKE_BINARY_DIR}/test_modules/xtremis/)
+    set(GR_TEST_LIBRARY_DIRS ${CMAKE_BINARY_DIR}/test_modules/verilog2/)
 endif(NOT APPLE)
 
 GR_ADD_TEST(qa_verilator ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_verilator.py)
 GR_ADD_TEST(qa_axis_block ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_axis_block.py)
+GR_ADD_TEST(qa_regaccess ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qa_regaccess.py)

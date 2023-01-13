@@ -85,7 +85,7 @@ class Module:
 
         with Module._BUILD_LOCK:
             del Module._BUILD_COND[key]
-            cond.notifyAll()
+            cond.notify_all()
 
         return ret
 
@@ -148,6 +148,7 @@ class Module:
         resets = []
         resetns = []
         buses = {}
+        dregs = {}
 
         def axis(dir, name, width):
             for sig in ['tvalid', 'tready', 'tdata', 'tuser', 'tlast']:
@@ -165,6 +166,31 @@ class Module:
                 assert axis['dir'] == dir
                 assert sig not in axis
                 axis[sig] = width
+
+                return True
+            return False
+
+        def dreg(dir, name, width):
+            for sig in ['dout', 'din', 'dset']:
+                if not name.endswith('_' + sig):
+                    continue
+                bus = name[:-(1 + len(sig))]
+
+                if sig == 'dout':
+                    assert dir == 'OUT'
+                else:
+                    assert dir == 'IN'
+
+                dreg = dregs.setdefault(bus, {})
+                assert sig not in dreg
+                dreg[sig] = True
+
+                if sig == 'dset':
+                    assert width == 1
+                else:
+                    assert 'width' not in dreg or dreg['width'] == width
+                    assert width <= 64
+                    dreg['width'] = width
 
                 return True
             return False
@@ -191,6 +217,8 @@ class Module:
                     resetns.append(name)
                 elif axis(dir, name, width):
                     pass
+                elif dreg(dir, name, width):
+                    pass
                 else:
                     raise ValueError('invalid signal: ' + name)
 
@@ -200,6 +228,9 @@ class Module:
 
         for bus in buses.values():
             assert 'tvalid' in bus and 'tready' in bus
+
+        for bus in dregs.values():
+            assert 'din' not in bus or 'dset' in bus
 
         inputs = [{
             'name': key,
@@ -217,8 +248,18 @@ class Module:
         } for key, val in buses.items() if val['dir'] != 'IN']
         sorted(outputs, key=lambda d: d['name'])
 
+        registers = [{
+            'name': key,
+            'width': val.get('width', 0),
+            'dout': val.get('dout', False),
+            'din': val.get('din', False),
+            'dset': val.get('dset', False),
+        } for key, val in dregs.items()]
+        registers = sorted(registers, key=lambda d: d['name'])
+
         input_vlens = [Module._get_vlen(a) for a in inputs]
         output_vlens = [Module._get_vlen(a) for a in outputs]
+        reg_widths = [a['width'] for a in registers]
 
         ports = {
             'clocks': clocks,
@@ -228,6 +269,8 @@ class Module:
             'outputs': outputs,
             'input_vlens': input_vlens,
             'output_vlens': output_vlens,
+            'registers': registers,
+            'reg_widths': reg_widths,
         }
         self.ports_cache[header_path] = (ports, mtime)
 
@@ -253,6 +296,9 @@ class Module:
 
     def get_output_vlens(self, params: Dict[str, Any]) -> List[int]:
         return self.get_ports(params)['output_vlens']
+
+    def get_reg_widths(self, params: Dict[str, Any]) -> List[int]:
+        return self.get_ports(params)['reg_widths']
 
     _WRAPPER_TEMPLATE = """// Generated, do not modify!
 
@@ -332,7 +378,7 @@ extern "C" void work_block(Block *block,
 
 {read_sizes}
     int idle = 0;
-    while (idle < 20)
+    while (idle < 100)
     {{
         idle += 1;
 
@@ -347,6 +393,15 @@ extern "C" void work_block(Block *block,
 {axis_stage3}    }}
 
 {write_sizes}}}
+
+extern "C" uint64_t read_register(Block *block, uint32_t reg)
+{{
+    assert(block != nullptr && block->config == CONFIG);
+    uint64_t value = 0;
+
+{read_regs}
+    return value;
+}}
 """
 
     def _compile_job(self, params: Dict[str, Any]):
@@ -511,6 +566,13 @@ extern "C" void work_block(Block *block,
                 "    output_sizes[{idx}] -= {name}_size;\n"
             ).format(name=axis['name'], idx=idx)
 
+        read_regs = ""
+        for idx, dreg in enumerate(ports['registers']):
+            read_regs += (
+                "    if (reg == {idx})\n"
+                "        value = block->impl.{name}_dout;\n"
+            ).format(idx=idx, name=dreg['name'])
+
         config = {
             'component': self.component,
             'params': params,
@@ -530,6 +592,7 @@ extern "C" void work_block(Block *block,
             axis_stage2=axis_stage2,
             axis_stage3=axis_stage3,
             write_sizes=write_sizes,
+            read_regs=read_regs,
         )
 
         filename = os.path.join(obj_dir, 'wrapper.cpp')
@@ -576,6 +639,8 @@ extern "C" void work_block(Block *block,
             Module.CTYPES_ITEMS * num_inputs,
             Module.CTYPES_ITEMS * num_outputs,
         ]
+        lib.read_register.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        lib.read_register.restype = ctypes.c_uint64
 
         self.lib_cache[lib_path] = (lib, mtime)
         return lib
@@ -603,10 +668,15 @@ class Instance:
         self.config = json.loads(self.lib.config())
         self.input_vlens = self.config['input_vlens']
         self.output_vlens = self.config['output_vlens']
+
+        self._reg_indices = {r['name']: i for
+                             i, r in enumerate(self.config['registers'])}
+
         self._input_sizes = (ctypes.c_int64 * len(self.input_vlens))()
         self._output_sizes = (ctypes.c_int64 * len(self.output_vlens))()
         self._input_items = (Module.CTYPES_ITEMS * len(self.input_vlens))()
         self._output_items = (Module.CTYPES_ITEMS * len(self.output_vlens))()
+
         self.block = self.lib.create_block()
         self.reset()
 
@@ -618,15 +688,23 @@ class Instance:
     def __del__(self):
         self.close()
 
-    @property
+    @ property
     def input_buses(self) -> List[str]:
         return [b['name'] for b in self.config['inputs']]
 
-    @property
+    @ property
     def output_buses(self) -> List[str]:
         return [b['name'] for b in self.config['outputs']]
 
+    @ property
+    def register_names(self) -> List[str]:
+        return [b['name'] for b in self.config['registers']]
+
     def reset(self):
+        """
+        Resets the underlying verilog block.
+        """
+
         self.lib.reset_block(self.block)
 
     def work(self,
@@ -677,3 +755,10 @@ class Instance:
             self._output_items[i] = None
 
         return consumed, produced
+
+    def read_reg(self, reg: str) -> int:
+        """
+        Reads the current value of the given register.
+        """
+        idx = self._reg_indices[reg]
+        return self.lib.read_register(self.block, idx)
