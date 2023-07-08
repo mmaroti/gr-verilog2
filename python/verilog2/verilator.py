@@ -317,6 +317,7 @@ struct Block
 {{
     const wchar_t *config = CONFIG;
     std::mutex mutex;
+    uint64_t cycles = 0;
     {component} impl;
 }};
 
@@ -390,6 +391,7 @@ extern "C" void work_block(Block *block,
     while (idle < 100)
     {{
         idle += 1;
+        block->cycles += 1;
 
 {axis_stage1}
         set_clocks(block, 1);
@@ -429,6 +431,14 @@ extern "C" void write_register(Block *block, uint32_t reg, uint64_t value)
     block->impl.eval();
 
 {disable}}}
+
+extern "C" uint64_t get_cycles(Block *block)
+{{
+    assert(block != nullptr);
+    std::lock_guard<std::mutex> lock(block->mutex);
+    assert(block->config == CONFIG);
+    return block->cycles;
+}}
 """
 
     def _compile_job(self, params: Dict[str, Any]):
@@ -686,6 +696,9 @@ extern "C" void write_register(Block *block, uint32_t reg, uint64_t value)
         lib.write_register.argtypes = [
             ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint64]
 
+        lib.get_cycles.argtypes = [ctypes.c_void_p]
+        lib.get_cycles.restype = ctypes.c_uint64
+
         self.lib_cache[lib_path] = (lib, mtime)
         return lib
 
@@ -817,3 +830,9 @@ class Instance:
         """
         idx = self._reg_indices[name]
         self.lib.write_register(self.block, idx, value)
+
+    def get_cycles(self) -> int:
+        """
+        Returns the number of clock cycles this block has executed so far.
+        """
+        return self.lib.get_cycles(self.block)

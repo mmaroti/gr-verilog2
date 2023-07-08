@@ -56,3 +56,6 @@ class axis_block(gr.basic_block):
 
     def write_register(self, name: str, value: int = 0):
         self.instance.write_register(name, value)
+
+    def get_cycles(self) -> int:
+        return self.instance.get_cycles()
