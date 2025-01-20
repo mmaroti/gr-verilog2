@@ -13,6 +13,10 @@ cmake_minimum_required(VERSION 3.8)
 project(gr-verilog2 CXX)
 enable_testing()
 
+# setting policies to avoid wornings
+cmake_policy(SET CMP0148 OLD)
+cmake_policy(SET CMP0011 NEW)
+
 # Install to PyBOMBS target prefix if defined
 if(DEFINED ENV{PYBOMBS_PREFIX})
     set(CMAKE_INSTALL_PREFIX $ENV{PYBOMBS_PREFIX})

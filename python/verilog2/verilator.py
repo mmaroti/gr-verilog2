@@ -133,7 +133,7 @@ class Module:
         assert(os.path.exists(header))
 
     _RE_PORT = re.compile(
-        r'^\s*VL_(IN|OUT)(|8|16|32|64|W)\((\w+),(\d+),(\d+)(,\d+)?\)')
+        r'^\s*VL_(IN|OUT)(|8|16|32|64|W)\(\&?(\w+),(\d+),(\d+)(,\d+)?\)')
 
     def _parse_ports_job(self, obj_dir: str) -> Dict[str, Any]:
         header_path = os.path.join(obj_dir, self.component + '.h')

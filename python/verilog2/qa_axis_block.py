@@ -20,7 +20,7 @@ import random
 import time
 
 from gnuradio import gr, gr_unittest, blocks
-import verilog2
+from gnuradio import verilog2
 
 
 class qa_axis_block(gr_unittest.TestCase):
