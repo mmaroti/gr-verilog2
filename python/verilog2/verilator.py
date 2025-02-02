@@ -130,7 +130,7 @@ class Module:
         print(" ".join(command))
         result = subprocess.run(command, cwd=self.build_dir)
         result.check_returncode()
-        assert(os.path.exists(header))
+        assert os.path.exists(header)
 
     _RE_PORT = re.compile(
         r'^\s*VL_(IN|OUT)(|8|16|32|64|W)\(\&?(\w+),(\d+),(\d+)(,\d+)?\)')
@@ -227,7 +227,7 @@ class Module:
         resetns = sorted(resetns)
 
         for bus in buses.values():
-            assert 'tvalid' in bus and 'tready' in bus
+            assert 'tvalid' in bus
 
         for bus in dregs.values():
             assert 'din' not in bus or 'dset' in bus
@@ -237,6 +237,7 @@ class Module:
             'tdata': val.get('tdata', 0),
             'tuser': val.get('tuser', 0),
             'tlast': val.get('tlast', 0),
+            'tready': 'tready' in val,
         } for key, val in buses.items() if val['dir'] == 'IN']
         inputs = sorted(inputs, key=lambda d: d['name'])
 
@@ -245,6 +246,7 @@ class Module:
             'tdata': val.get('tdata', 0),
             'tuser': val.get('tuser', 0),
             'tlast': val.get('tlast', 0),
+            'tready': 'tready' in val,
         } for key, val in buses.items() if val['dir'] != 'IN']
         sorted(outputs, key=lambda d: d['name'])
 
@@ -379,7 +381,7 @@ void set_qdata(int32_t *output, QData data)
 extern "C" void work_block(Block *block,
                            int64_t *input_sizes,
                            int64_t *output_sizes,
-                           int32_t **input_items,
+                           const int32_t **input_items,
                            int32_t **output_items)
 {{
     assert(block != nullptr);
@@ -390,10 +392,10 @@ extern "C" void work_block(Block *block,
     int idle = 0;
     while (idle < 100)
     {{
+{axis_stage1}
         idle += 1;
         block->cycles += 1;
 
-{axis_stage1}
         set_clocks(block, 1);
         block->impl.eval();
 
@@ -473,11 +475,13 @@ extern "C" uint64_t get_cycles(Block *block)
             disable += "    block->impl.{}_tvalid = 0;\n".format(
                 axis['name'])
         for axis in ports['outputs']:
-            disable += "    block->impl.{}_tready = 0;\n".format(
-                axis['name'])
+            if axis['tready']:
+                disable += "    block->impl.{}_tready = 0;\n".format(
+                    axis['name'])
         for dreg in ports['registers']:
-            disable += "    block->impl.{}_dset = 0;\n".format(
-                dreg['name'])
+            if dreg['dset']:
+                disable += "    block->impl.{}_dset = 0;\n".format(
+                    dreg['name'])
 
         read_sizes = ""
         for idx, axis in enumerate(ports['inputs']):
@@ -494,19 +498,36 @@ extern "C" uint64_t get_cycles(Block *block)
 
         axis_stage1 = ""
 
+        for axis in ports['outputs']:
+            if not axis['tready']:
+                axis_stage1 += (
+                    "        if ({name}_size <= 0)\n"
+                    "            break;\n"
+                ).format(name=axis['name'])
+
         for axis in ports['inputs']:
             name = axis['name']
-            axis_stage1 += (
-                "        {name}_step = (block->impl.{name}_tvalid != 0 && block->impl.{name}_tready != 0);\n"
-            ).format(name=axis['name'])
+            if axis['tready']:
+                axis_stage1 += (
+                    "        {name}_step = (block->impl.{name}_tvalid != 0 && block->impl.{name}_tready != 0);\n"
+                ).format(name=axis['name'])
+            else:
+                axis_stage1 += (
+                    "        {name}_step = block->impl.{name}_tvalid != 0;\n"
+                ).format(name=axis['name'])
 
         for idx, axis in enumerate(ports['outputs']):
             name = axis['name']
 
-            axis_stage1 += (
-                "        if (block->impl.{name}_tvalid != 0 && block->impl.{name}_tready != 0)\n"
-                "        {{\n"
-            ).format(name=name)
+            if axis['tready']:
+                axis_stage1 += (
+                    "        if (block->impl.{name}_tvalid != 0 && block->impl.{name}_tready != 0)\n"
+                ).format(name=name)
+            else:
+                axis_stage1 += (
+                    "        if (block->impl.{name}_tvalid != 0)\n"
+                ).format(name=name)
+            axis_stage1 += "        {\n"
 
             offset = 0
             for port in ['tdata', 'tuser', 'tlast']:
@@ -536,7 +557,7 @@ extern "C" uint64_t get_cycles(Block *block)
                              mask=(1 << (width + 32 - 32*count)) - 1)
                     offset += 1
 
-            assert(ports['output_vlens'][idx] == offset)
+            assert ports['output_vlens'][idx] == offset
             axis_stage1 += (
                 "            {name}_data += {offset};\n"
                 "            {name}_size -= 1;\n"
@@ -577,7 +598,7 @@ extern "C" uint64_t get_cycles(Block *block)
                         ).format(name=name, port=port, index=i, offset=offset)
                         offset += 1
 
-            assert(ports['input_vlens'][idx] == offset)
+            assert ports['input_vlens'][idx] == offset
             axis_stage2 += (
                 "            block->impl.{name}_tvalid = 1;\n"
                 "            {name}_data += {offset};\n"
@@ -587,9 +608,10 @@ extern "C" uint64_t get_cycles(Block *block)
             ).format(name=name, offset=offset)
 
         for axis in ports['outputs']:
-            axis_stage2 += (
-                "        block->impl.{name}_tready = {name}_size > 0 ? 1 : 0;\n"
-            ).format(name=axis['name'])
+            if axis['tready']:
+                axis_stage2 += (
+                    "        block->impl.{name}_tready = {name}_size > 0 ? 1 : 0;\n"
+                ).format(name=axis['name'])
 
         write_sizes = ""
         for idx, axis in enumerate(ports['inputs']):
@@ -661,7 +683,7 @@ extern "C" uint64_t get_cycles(Block *block)
         result = subprocess.run(
             command, cwd=os.path.join(obj_dir))
         result.check_returncode()
-        assert(os.path.exists(lib_path))
+        assert os.path.exists(lib_path)
 
     CTYPES_ITEMS = numpy.ctypeslib.ndpointer(
         ctypes.c_int32, flags="C_CONTIGUOUS")

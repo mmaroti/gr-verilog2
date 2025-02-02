@@ -24,33 +24,38 @@ from gnuradio import verilog2
 
 class qa_verilator(gr_unittest.TestCase):
 
-    SOURCES = [
+    SOURCES1 = [
         os.path.join(os.path.dirname(__file__), '..',
                      '..', 'examples', 'axis_copy_reg.v'),
     ]
 
+    SOURCES2 = [
+        os.path.join(os.path.dirname(__file__), '..',
+                     '..', 'examples', 'pipe_copy_reg.v'),
+    ]
+
     def test1(self):
-        mod = verilog2.Module(qa_verilator.SOURCES)
+        mod = verilog2.Module(qa_verilator.SOURCES1)
         print(mod.get_ports({}))
-        assert(mod.get_input_vlens({}) == [1])
+        assert mod.get_input_vlens({}) == [1]
 
-        assert(mod.get_input_vlens({'DATA_WIDTH': 8}) == [1])
-        assert(mod.get_output_vlens({'DATA_WIDTH': 8}) == [1])
+        assert mod.get_input_vlens({'DATA_WIDTH': 8}) == [1]
+        assert mod.get_output_vlens({'DATA_WIDTH': 8}) == [1]
 
-        assert(mod.get_input_vlens({'DATA_WIDTH': 32}) == [1])
-        assert(mod.get_output_vlens({'DATA_WIDTH': 32}) == [1])
+        assert mod.get_input_vlens({'DATA_WIDTH': 32}) == [1]
+        assert mod.get_output_vlens({'DATA_WIDTH': 32}) == [1]
 
-        assert(mod.get_input_vlens({'DATA_WIDTH': 33}) == [2])
-        assert(mod.get_output_vlens({'DATA_WIDTH': 33}) == [2])
+        assert mod.get_input_vlens({'DATA_WIDTH': 33}) == [2]
+        assert mod.get_output_vlens({'DATA_WIDTH': 33}) == [2]
 
-        assert(mod.get_input_vlens({'DATA_WIDTH': 64}) == [2])
-        assert(mod.get_output_vlens({'DATA_WIDTH': 64}) == [2])
+        assert mod.get_input_vlens({'DATA_WIDTH': 64}) == [2]
+        assert mod.get_output_vlens({'DATA_WIDTH': 64}) == [2]
 
-        assert(mod.get_input_vlens({'DATA_WIDTH': 65}) == [3])
-        assert(mod.get_output_vlens({'DATA_WIDTH': 65}) == [3])
+        assert mod.get_input_vlens({'DATA_WIDTH': 65}) == [3]
+        assert mod.get_output_vlens({'DATA_WIDTH': 65}) == [3]
 
     def test2(self):
-        mod = verilog2.Module(qa_verilator.SOURCES)
+        mod = verilog2.Module(qa_verilator.SOURCES1)
         ins = verilog2.Instance(mod, {'DATA_WIDTH': 8})
 
         length = random.randint(0, 50)
@@ -70,7 +75,7 @@ class qa_verilator(gr_unittest.TestCase):
         assert numpy.alltrue(output_item0[:length] == input_item0 % 256)
 
     def test3(self):
-        mod = verilog2.Module(qa_verilator.SOURCES)
+        mod = verilog2.Module(qa_verilator.SOURCES1)
         ins = verilog2.Instance(mod, {'DATA_WIDTH': 33})
 
         length = 10
@@ -90,7 +95,7 @@ class qa_verilator(gr_unittest.TestCase):
         assert numpy.alltrue(output_item0[:length, 1] == input_item0[:, 1] % 2)
 
     def test4(self):
-        mod = verilog2.Module(qa_verilator.SOURCES)
+        mod = verilog2.Module(qa_verilator.SOURCES1)
         ins = verilog2.Instance(mod, {'DATA_WIDTH': 65})
 
         length = 10
@@ -109,6 +114,46 @@ class qa_verilator(gr_unittest.TestCase):
         assert numpy.alltrue(output_item0[:length, 0] == input_item0[:, 0])
         assert numpy.alltrue(output_item0[:length, 1] == input_item0[:, 1])
         assert numpy.alltrue(output_item0[:length, 2] == input_item0[:, 2] % 2)
+
+    def test5(self):
+        mod = verilog2.Module(qa_verilator.SOURCES2)
+        ins = verilog2.Instance(mod, {'DATA_WIDTH': 32, 'STAGES': 0})
+
+        length = random.randint(0, 50)
+        input_item0 = numpy.random.randint(
+            0, 1000, size=(length, 1), dtype=numpy.int32)
+        output_item0 = numpy.empty((length + 10, 1), dtype=numpy.int32)
+
+        consumed, produced = ins.work([input_item0], [output_item0])
+        print("consumed", consumed)
+        print("produced", produced)
+        assert consumed == [length]
+        assert produced == [length]
+
+        print("input", input_item0.flatten())
+        print("input mod 256", input_item0.flatten() % 256)
+        print("output", output_item0[:length].flatten())
+        assert numpy.alltrue(output_item0[:length] == input_item0)
+
+    def test6(self):
+        mod = verilog2.Module(qa_verilator.SOURCES2)
+        ins = verilog2.Instance(mod, {'DATA_WIDTH': 32, 'STAGES': 1})
+
+        length = random.randint(0, 50)
+        input_item0 = numpy.random.randint(
+            0, 1000, size=(length, 1), dtype=numpy.int32)
+        output_item0 = numpy.empty((length + 10, 1), dtype=numpy.int32)
+
+        consumed, produced = ins.work([input_item0], [output_item0])
+        print("consumed", consumed)
+        print("produced", produced)
+        assert consumed == [length]
+        assert produced == [length]
+
+        print("input", input_item0.flatten())
+        print("input mod 256", input_item0.flatten() % 256)
+        print("output", output_item0[:length].flatten())
+        assert numpy.alltrue(output_item0[:length] == input_item0)
 
 
 if __name__ == '__main__':
